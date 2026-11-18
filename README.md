@@ -48,3 +48,12 @@ python -m venv .venv
 ```powershell
 .\.venv\Scripts\python.exe db.py   # prints the first 5 products
 ```
+
+## Version history
+
+### 0.1.0 — 2026-11-18
+- Add `build_db.py` to load each Olist CSV in `data/` into `data/olist.duckdb` (one table per file)
+- Add `db.py` with read-only `get_connection()` and `first_products(n)` helper
+- Add dataset source and table docs (`data/data_source.md`)
+- Add README, CLAUDE.md safety rules (no secrets, read-only DB, SELECT/WITH only), requirements and `.gitignore`
+- Add version-manager agent (`.claude/agents/version-manager.md`)
