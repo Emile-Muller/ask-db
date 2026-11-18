@@ -49,7 +49,15 @@ python -m venv .venv
 .\.venv\Scripts\python.exe db.py   # prints the first 5 products
 ```
 
+## Releasing
+
+In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It commits pending changes, runs tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, updates the docs, commits, and creates an annotated `vX.Y.Z` tag. It never pushes; publish with `git push origin main --follow-tags`.
+
 ## Version history
+
+### 0.2.0 — 2026-11-18
+- Add `/release` skill (`.claude/skills/release/SKILL.md`) for the release workflow
+- version-manager now validates and creates annotated `vX.Y.Z` tags (SemVer, VERSION match, no duplicate, version increase, clean tree)
 
 ### 0.1.0 — 2026-11-18
 - Add `build_db.py` to load each Olist CSV in `data/` into `data/olist.duckdb` (one table per file)
