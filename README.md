@@ -42,11 +42,28 @@ python -m venv .venv
 
 `db.py` provides read-only access to the database:
 
-- `get_connection()`: opens `data/olist.duckdb` with `read_only=True`. All queries go through this connection; only `build_db.py` writes to the database.
+- `get_connection()`: opens `data/olist.duckdb` with `read_only=True`, external access disabled (no file reads, `ATTACH`, extension install/load) and the configuration locked so SQL cannot re-enable it. All queries go through this connection; only `build_db.py` writes to the database.
 - `first_products(n=5)`: returns the first `n` rows of `olist_products_dataset` as a list of dicts.
 
 ```powershell
 .\.venv\Scripts\python.exe db.py   # prints the first 5 products
+```
+
+## SQL guardrail
+
+`sql_guard.py` is the only way user- or LLM-generated SQL may reach the database. Call `run_query(sql, max_rows=1000)`. It returns a `QueryResult` (`sql`, `columns`, `rows`, `truncated`, `as_dicts()`) or raises `UnsafeQueryError` with a message you can show the user.
+
+Checks, in order:
+
+1. **Parsed with sqlglot** (DuckDB dialect). SQL that does not parse is rejected.
+2. **One statement only.** Chained statements (`SELECT 1; DROP ...`) are rejected.
+3. **SELECT only.** `WITH`, `UNION`, `INTERSECT` and `EXCEPT` are allowed. `INSERT`, `UPDATE`, `DELETE`, DDL, `PRAGMA`, `ATTACH`, `COPY`, `SET`, `INSTALL`, `LOAD`, `CALL`, `SELECT ... INTO`, `DESCRIBE` and similar are rejected anywhere in the query.
+4. **Table allowlist.** Queries may only reference CTEs and tables in the database's `main` schema. Table functions (`read_csv`, `glob`, `query`, ...), file paths (`FROM 'x.csv'`) and other schemas are rejected.
+5. **Row limit.** A missing `LIMIT`, a non-literal one, or one over `max_rows` is replaced, and at most `max_rows` rows are returned. `truncated` tells you whether there were more.
+6. **Read-only execution.** The SQL that runs is the one sqlglot regenerates from the validated AST, not the raw input, and it runs on the locked-down connection above.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q   # guardrail tests
 ```
 
 ## Releasing
@@ -54,6 +71,13 @@ python -m venv .venv
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 0.3.0 — 2026-11-18
+- Add SQL guardrail `sql_guard.py`: `run_query()` parses SQL with sqlglot and allows only one SELECT statement on allowlisted `main` tables
+- Guardrail rejects writes, DDL, PRAGMA/ATTACH/COPY/SET/INSTALL/LOAD, file-reading table functions and file paths, and caps rows with LIMIT (`max_rows`, default 1000)
+- `db.get_connection()` now turns off external access and extension autoload/autoinstall, and locks the configuration
+- Add pytest suite `tests/test_sql_guard.py` for the guardrail and the locked-down connection
+- Add `sqlglot` and `pytest` to `requirements.txt`; document the guardrail in the README
 
 ### 0.2.1 — 2026-11-18
 - `/release` now makes one commit (pending work, `VERSION` and history together) and then tags it
