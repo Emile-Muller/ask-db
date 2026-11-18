@@ -57,6 +57,9 @@ so they go in the same commit.
 
   - <same bullets as the README history entry>
   ```
+- The pre-commit hook (ruff lint + format) runs on this commit. If it fails or modifies files, the
+  commit is not made: show the output, and if it only reformatted/auto-fixed files, re-stage them
+  (`git add -A`) and commit again once. Never bypass it with `--no-verify`.
 - After committing, `git status --porcelain` must be empty.
 
 ## 6. Tag

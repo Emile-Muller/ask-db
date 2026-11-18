@@ -64,6 +64,8 @@ Checks, in order:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q   # guardrail tests
+.\.venv\Scripts\python.exe -m pre_commit install          # once per clone: ruff lint + format on every commit
+.\.venv\Scripts\python.exe -m pre_commit run --all-files  # run the hooks manually (config in ruff.toml)
 ```
 
 ## Releasing
@@ -71,6 +73,13 @@ Checks, in order:
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 0.4.0 — 2026-11-18
+- Add ruff linting and formatting (`ruff.toml`: py311, line length 100, rules incl. bugbear, bandit, simplify)
+- Add pre-commit hooks (`.pre-commit-config.yaml`) running `ruff check --fix` and `ruff format`; add `ruff` and `pre-commit` to `requirements.txt`
+- Reformat `sql_guard.py` and tests with ruff; use `zip(..., strict=True)` in `sql_guard.py` and `db.py`; simplify the LIMIT check
+- Add read-only code-reviewer agent (`.claude/agents/code-reviewer.md`) for readability, performance, best practices and safety rules
+- `/release` skill now handles the pre-commit hook (re-stage auto-fixes once, never `--no-verify`); README documents the hook setup
 
 ### 0.3.0 — 2026-11-18
 - Add SQL guardrail `sql_guard.py`: `run_query()` parses SQL with sqlglot and allows only one SELECT statement on allowlisted `main` tables

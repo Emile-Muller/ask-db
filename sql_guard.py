@@ -31,10 +31,36 @@ DEFAULT_MAX_ROWS = 1000
 
 # Node types that must never appear anywhere in an accepted query.
 _FORBIDDEN_NAMES = (
-    "Insert", "Update", "Delete", "Merge", "Create", "Drop", "Alter", "TruncateTable",
-    "Command", "Pragma", "Copy", "Attach", "Detach", "Install", "LoadData", "Set",
-    "Use", "Transaction", "Commit", "Rollback", "Into", "Describe", "Summarize",
-    "Refresh", "Cache", "Uncache", "Grant", "Revoke", "Analyze", "Export",
+    "Insert",
+    "Update",
+    "Delete",
+    "Merge",
+    "Create",
+    "Drop",
+    "Alter",
+    "TruncateTable",
+    "Command",
+    "Pragma",
+    "Copy",
+    "Attach",
+    "Detach",
+    "Install",
+    "LoadData",
+    "Set",
+    "Use",
+    "Transaction",
+    "Commit",
+    "Rollback",
+    "Into",
+    "Describe",
+    "Summarize",
+    "Refresh",
+    "Cache",
+    "Uncache",
+    "Grant",
+    "Revoke",
+    "Analyze",
+    "Export",
 )
 FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = tuple(
     getattr(exp, name) for name in _FORBIDDEN_NAMES if hasattr(exp, name)
@@ -42,11 +68,28 @@ FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = tuple(
 
 # Functions that reach outside the allowed tables (files, env, dynamic SQL).
 FORBIDDEN_FUNCTIONS = {
-    "query", "query_table", "glob", "getenv", "read_text", "read_blob",
-    "read_csv", "read_csv_auto", "read_json", "read_json_auto", "read_ndjson",
-    "read_parquet", "parquet_scan", "parquet_metadata", "parquet_schema",
-    "sniff_csv", "iceberg_scan", "delta_scan", "sqlite_scan", "postgres_scan",
-    "mysql_scan", "current_setting",
+    "query",
+    "query_table",
+    "glob",
+    "getenv",
+    "read_text",
+    "read_blob",
+    "read_csv",
+    "read_csv_auto",
+    "read_json",
+    "read_json_auto",
+    "read_ndjson",
+    "read_parquet",
+    "parquet_scan",
+    "parquet_metadata",
+    "parquet_schema",
+    "sniff_csv",
+    "iceberg_scan",
+    "delta_scan",
+    "sqlite_scan",
+    "postgres_scan",
+    "mysql_scan",
+    "current_setting",
 }
 
 
@@ -56,13 +99,13 @@ class UnsafeQueryError(ValueError):
 
 @dataclass(frozen=True)
 class QueryResult:
-    sql: str                 # the SQL that was actually executed
+    sql: str  # the SQL that was actually executed
     columns: list[str]
     rows: list[tuple[Any, ...]]
-    truncated: bool          # True if more than max_rows rows were available
+    truncated: bool  # True if more than max_rows rows were available
 
     def as_dicts(self) -> list[dict[str, Any]]:
-        return [dict(zip(self.columns, row)) for row in self.rows]
+        return [dict(zip(self.columns, row, strict=True)) for row in self.rows]
 
 
 def _parse_single(sql: str) -> exp.Expression:
@@ -117,16 +160,21 @@ def validate_sql(
             raise UnsafeQueryError("Table functions are not allowed in FROM / JOIN.")
         name = table.name.lower()
         if table.catalog or (table.db and table.db.lower() != "main"):
-            raise UnsafeQueryError(f"Only tables in the main schema are allowed: {table.sql(DIALECT)}.")
+            raise UnsafeQueryError(
+                f"Only tables in the main schema are allowed: {table.sql(DIALECT)}."
+            )
         if name not in allowed and not (name in cte_names and not table.db):
             raise UnsafeQueryError(f"Unknown or disallowed table: {table.name}.")
 
     # Row limit: keep a small literal LIMIT, otherwise cap it.
     limit = root.args.get("limit")
     current = None
-    if isinstance(limit, exp.Limit) and isinstance(limit.expression, exp.Literal):
-        if limit.expression.is_int:
-            current = int(limit.expression.this)
+    if (
+        isinstance(limit, exp.Limit)
+        and isinstance(limit.expression, exp.Literal)
+        and limit.expression.is_int
+    ):
+        current = int(limit.expression.this)
     if current is None or current > max_rows:
         root = root.limit(max_rows + 1, copy=False)
 

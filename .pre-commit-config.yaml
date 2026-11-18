@@ -1,0 +1,8 @@
+# Install once per clone: .\.venv\Scripts\python.exe -m pre_commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.5  # keep in sync with the ruff version in requirements.txt
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format

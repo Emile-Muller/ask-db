@@ -30,7 +30,7 @@ def first_products(n: int = 5):
     with get_connection() as con:
         cur = con.execute("SELECT * FROM olist_products_dataset LIMIT ?", [n])
         cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        return [dict(zip(cols, row, strict=True)) for row in cur.fetchall()]
 
 
 if __name__ == "__main__":
