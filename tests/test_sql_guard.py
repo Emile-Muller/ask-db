@@ -5,8 +5,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import db  # noqa: E402
-from sql_guard import UnsafeQueryError, run_query, validate_sql  # noqa: E402
+from agentic_query import db  # noqa: E402
+from agentic_query.sql_guard import UnsafeQueryError, run_query, validate_sql  # noqa: E402
 
 TABLES = {"olist_orders_dataset", "olist_products_dataset"}
 
@@ -99,7 +99,9 @@ def test_limit_applies_to_whole_union():
 
 # --- integration: real database ------------------------------------------
 
-needs_db = pytest.mark.skipif(not db.DB_PATH.exists(), reason="run build_db.py first")
+needs_db = pytest.mark.skipif(
+    not db.DB_PATH.exists(), reason="run python -m agentic_query.build_db first"
+)
 
 
 @needs_db

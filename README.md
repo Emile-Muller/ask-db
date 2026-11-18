@@ -23,6 +23,23 @@ CSV files live in `data/`. See [data/data_source.md](data/data_source.md) for so
 
 > **Note:** the original `olist_products_dataset.csv` misspells two columns (`product_name_lenght`, `product_description_lenght`). The header has been fixed locally to `product_name_length` and `product_description_length`. If you re-download the dataset, fix the header again before building the database.
 
+## Project layout
+
+```
+agentic_query/   Python package (run modules with `python -m agentic_query.<module>`)
+  build_db.py    CSVs -> data/olist.duckdb (the only writer)
+  db.py          read-only, locked-down DuckDB connection
+  sql_guard.py   SQL guardrail: the only path for untrusted SQL
+  schema.py      schema introspection + descriptions -> prompt schema block
+  text_to_sql.py question -> Claude -> SQL -> guardrail -> results
+  eval.py        end-to-end eval against gold SQL
+data/            dataset CSVs, olist.duckdb, data_source.md, schema.yaml (table/column descriptions)
+eval/            questions.yaml (eval set)
+tests/           pytest suite
+```
+
+Run everything from the project root so `agentic_query` is importable.
+
 ## Setup
 
 Requires Python 3.11+.
@@ -34,24 +51,24 @@ python -m venv .venv
 
 ## Database
 
-`build_db.py` loads every CSV in `data/` into `data/olist.duckdb`, one table per file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`). Re-run it whenever the CSVs change.
+`agentic_query/build_db.py` loads every CSV in `data/` into `data/olist.duckdb`, one table per file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`). Re-run it whenever the CSVs change.
 
 ```powershell
-.\.venv\Scripts\python.exe build_db.py
+.\.venv\Scripts\python.exe -m agentic_query.build_db
 ```
 
-`db.py` provides read-only access to the database:
+`agentic_query/db.py` provides read-only access to the database:
 
-- `get_connection()`: opens `data/olist.duckdb` with `read_only=True`, external access disabled (no file reads, `ATTACH`, extension install/load) and the configuration locked so SQL cannot re-enable it. All queries go through this connection; only `build_db.py` writes to the database.
+- `get_connection()`: opens `data/olist.duckdb` with `read_only=True`, external access disabled (no file reads, `ATTACH`, extension install/load) and the configuration locked so SQL cannot re-enable it. All queries go through this connection; only `build_db` writes to the database.
 - `first_products(n=5)`: returns the first `n` rows of `olist_products_dataset` as a list of dicts.
 
 ```powershell
-.\.venv\Scripts\python.exe db.py   # prints the first 5 products
+.\.venv\Scripts\python.exe -m agentic_query.db   # prints the first 5 products
 ```
 
 ## SQL guardrail
 
-`sql_guard.py` is the only way user- or LLM-generated SQL may reach the database. Call `run_query(sql, max_rows=1000)`. It returns a `QueryResult` (`sql`, `columns`, `rows`, `truncated`, `as_dicts()`) or raises `UnsafeQueryError` with a message you can show the user.
+`agentic_query/sql_guard.py` is the only way user- or LLM-generated SQL may reach the database. Call `run_query(sql, max_rows=1000)`. It returns a `QueryResult` (`sql`, `columns`, `rows`, `truncated`, `as_dicts()`) or raises `UnsafeQueryError` with a message you can show the user.
 
 Checks, in order:
 
@@ -68,11 +85,51 @@ Checks, in order:
 .\.venv\Scripts\python.exe -m pre_commit run --all-files  # run the hooks manually (config in ruff.toml)
 ```
 
+## Text-to-SQL pipeline
+
+```
+question ─► prompt (instructions + schema context + question) ─► Claude ─► SQL ─► guardrail ─► DuckDB (read-only)
+```
+
+1. **Schema introspection** (`agentic_query/schema.py`): `introspect()` reads table names, column names and types from DuckDB's `information_schema`.
+2. **Descriptions** (`data/schema.yaml`): what each table and column contains, primary/foreign keys (the CSV-built database declares none), and business rules that remove guesswork (e.g. *revenue = `SUM(price)` from order items*, *customers = distinct `customer_unique_id`*, *use English category names*). `render_schema()` merges it with the live schema into the prompt's schema block. A test checks that `data/schema.yaml` and the database stay in sync.
+3. **Prompt** (`agentic_query/text_to_sql.py`): the system prompt starts with *"You write SQL for DuckDB. Use only the tables below. Return one SELECT query only."*, followed by the schema block (prompt-cached, since it never changes). The question goes in the user message, wrapped in `<question>` tags and treated as data.
+4. **Generation + guardrail**: `generate_sql(question)` calls Claude (`claude-opus-5-5`, effort `medium`) and returns the SQL. `ask(question)` then runs it through `sql_guard.run_query`, so LLM output is never executed unchecked. If the model declines, a server-side fallback model is tried in the same call.
+
+The SDK reads the API key from the `ANTHROPIC_API_KEY` environment variable; it is never in code. Optional overrides: `AGENTIC_QUERY_MODEL`, `AGENTIC_QUERY_EFFORT`.
+
+```powershell
+$env:ANTHROPIC_API_KEY = "..."   # in your own terminal; never commit it
+.\.venv\Scripts\python.exe -m agentic_query.schema                    # print the schema context sent to the model
+.\.venv\Scripts\python.exe -m agentic_query.text_to_sql "Which product categories generate the most revenue?"
+```
+
+## Eval
+
+`eval/questions.yaml` holds 30 showcase questions: 28 with a hand-written gold SQL answer, plus 2 that must be refused (a delete request and a prompt injection). `agentic_query/eval.py` sends each question through the whole chain and compares the result with the gold result: same row count, and each gold column matches a generated column (numbers within 0.01 / 0.1%, order checked only for rankings and time series, column names and extra columns ignored). Refusal questions pass if the guardrail rejects the SQL or the model returns its *"Cannot answer"* row.
+
+```powershell
+.\.venv\Scripts\python.exe -m agentic_query.eval --gold-only   # check the gold SQL only (no API calls)
+.\.venv\Scripts\python.exe -m agentic_query.eval               # full run (~30 API calls); report in eval/last_run.json
+.\.venv\Scripts\python.exe -m agentic_query.eval --only top_categories_revenue avg_review_score
+```
+
+In Claude Code, `/eval` runs it and explains each failure (`/eval gold` for the free gold check, `/eval <id> ...` for some questions).
+
 ## Releasing
 
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 0.5.0 — 2026-11-18
+- Add text-to-SQL pipeline `agentic_query/text_to_sql.py`: `generate_sql()` asks Claude for one SELECT, `ask()` runs it through the guardrail
+- Add schema context: `agentic_query/schema.py` introspects DuckDB and merges `data/schema.yaml` (table/column descriptions, keys, business rules) into the prompt
+- Add end-to-end eval `agentic_query/eval.py` with 30 questions in `eval/questions.yaml` (gold SQL + 2 refusals) and an `/eval` skill
+- Move `build_db.py`, `db.py` and `sql_guard.py` into the `agentic_query` package (run with `python -m agentic_query.<module>`)
+- Add offline tests `tests/test_text_to_sql.py` (fake Claude client); update imports in `tests/test_sql_guard.py`
+- Add `anthropic` and `pyyaml` to requirements; ignore `eval/last_run.json`; update ruff config and `/release` skill paths
+- README documents the project layout, text-to-SQL pipeline and eval
 
 ### 0.4.0 — 2026-11-18
 - Add ruff linting and formatting (`ruff.toml`: py311, line length 100, rules incl. bugbear, bandit, simplify)

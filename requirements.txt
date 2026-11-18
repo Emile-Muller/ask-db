@@ -1,5 +1,7 @@
 duckdb>=2.0
 sqlglot>=30.0
+anthropic>=2.10
+pyyaml>=6.0
 pytest>=8.0
 ruff==0.17.5
 pre-commit>=4.0

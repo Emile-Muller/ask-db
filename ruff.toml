@@ -17,4 +17,4 @@ select = [
 [lint.per-file-ignores]
 "tests/**" = ["S101"]  # assert is fine in tests
 # Table names come from local CSV filenames at build time, not user/LLM input.
-"build_db.py" = ["S608"]
+"agentic_query/build_db.py" = ["S608"]

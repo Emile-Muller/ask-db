@@ -24,7 +24,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
-from db import get_connection
+from agentic_query.db import get_connection
 
 DIALECT = "duckdb"
 DEFAULT_MAX_ROWS = 1000

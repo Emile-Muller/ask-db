@@ -1,0 +1,139 @@
+# Human-written descriptions of the Olist database, merged with the live schema
+# (table/column names and types introspected from DuckDB) by agentic_query/schema.py.
+#
+# The database is built from CSVs, so DuckDB has no declared keys: primary and
+# foreign keys are declared here. tests/test_text_to_sql.py checks that every table and
+# column below exists in the database and that every database column is described.
+
+dataset: >
+  Olist Brazilian e-commerce marketplace, ~100k orders placed between 2016-09 and
+  2018-10. Money is in Brazilian reais (BRL). Text values (cities, Portuguese
+  category names, review text) are lowercase Portuguese without accents.
+
+rules:
+  - "Revenue = SUM(olist_order_items_dataset.price). Do not add freight_value unless the question asks for freight or total paid; do not use payments for revenue unless asked."
+  - "Do not filter on order_status unless the question asks (e.g. 'delivered orders')."
+  - "For product categories, show the English name: join olist_products_dataset to product_category_name_translation on product_category_name and use product_category_name_english."
+  - "A customer (person) is customer_unique_id. customer_id is one per order, so count distinct customer_unique_id for 'customers'."
+  - "An order can have several items (one row per item in olist_order_items_dataset) and several payments. Aggregate carefully to avoid double counting when joining items and payments."
+  - "The date of an order is order_purchase_timestamp. Use date_trunc('month', ...) for monthly series and strftime(..., '%Y-%m') to label months."
+  - "Delivery time in days = date_diff('day', order_purchase_timestamp, order_delivered_customer_date), only for orders with order_delivered_customer_date not null."
+  - "Round money and averages to 2 decimals."
+
+tables:
+  olist_orders_dataset:
+    description: One row per order. Central table linking customers, items, payments and reviews.
+    primary_key: [order_id]
+    foreign_keys:
+      customer_id: olist_customers_dataset.customer_id
+    columns:
+      order_id: Order identifier.
+      customer_id: Customer key for this order (one customer_id per order; use customer_unique_id for the person).
+      order_status: "Order status: delivered, shipped, canceled, unavailable, invoiced, processing, created, approved."
+      order_purchase_timestamp: When the customer placed the order.
+      order_approved_at: When the payment was approved (null if never approved).
+      order_delivered_carrier_date: When the seller handed the order to the carrier.
+      order_delivered_customer_date: When the customer received the order (null if not delivered).
+      order_estimated_delivery_date: Delivery date promised to the customer at purchase time.
+
+  olist_order_items_dataset:
+    description: One row per item in an order. Each item is sold by one seller.
+    primary_key: [order_id, order_item_id]
+    foreign_keys:
+      order_id: olist_orders_dataset.order_id
+      product_id: olist_products_dataset.product_id
+      seller_id: olist_sellers_dataset.seller_id
+    columns:
+      order_id: Order the item belongs to.
+      order_item_id: Item number within the order (1, 2, 3...).
+      product_id: Product sold.
+      seller_id: Seller who sold the item.
+      shipping_limit_date: Deadline for the seller to hand the item to the carrier.
+      price: Item price in BRL (excluding freight).
+      freight_value: Freight cost charged for this item in BRL.
+
+  olist_order_payments_dataset:
+    description: Payments for an order. An order can be paid with several payments (e.g. card + voucher).
+    primary_key: [order_id, payment_sequential]
+    foreign_keys:
+      order_id: olist_orders_dataset.order_id
+    columns:
+      order_id: Order paid.
+      payment_sequential: Sequence number of the payment within the order.
+      payment_type: "Payment method: credit_card, boleto (Brazilian bank slip), voucher, debit_card, not_defined."
+      payment_installments: Number of installments chosen (credit card).
+      payment_value: Amount paid in BRL (items + freight).
+
+  olist_order_reviews_dataset:
+    description: Customer satisfaction reviews, sent after delivery. Usually one per order.
+    primary_key: [review_id, order_id]
+    foreign_keys:
+      order_id: olist_orders_dataset.order_id
+    columns:
+      review_id: Review identifier (a few reviews cover several orders).
+      order_id: Order reviewed.
+      review_score: Rating from 1 (worst) to 5 (best).
+      review_comment_title: Optional review title in Portuguese (mostly null).
+      review_comment_message: Optional review text in Portuguese (often null).
+      review_creation_date: When the satisfaction survey was sent.
+      review_answer_timestamp: When the customer answered the survey.
+
+  olist_customers_dataset:
+    description: Customer address per order. One row per customer_id (i.e. per order).
+    primary_key: [customer_id]
+    foreign_keys:
+      customer_zip_code_prefix: olist_geolocation_dataset.geolocation_zip_code_prefix
+    columns:
+      customer_id: Key used by olist_orders_dataset (one per order).
+      customer_unique_id: The actual person. The same person has several customer_id values if they ordered several times.
+      customer_zip_code_prefix: First 5 digits of the zip code (text, keeps leading zeros).
+      customer_city: City, lowercase (e.g. sao paulo, rio de janeiro).
+      customer_state: Two-letter Brazilian state code (e.g. SP, RJ, MG).
+
+  olist_sellers_dataset:
+    description: Sellers (merchants) on the marketplace.
+    primary_key: [seller_id]
+    foreign_keys:
+      seller_zip_code_prefix: olist_geolocation_dataset.geolocation_zip_code_prefix
+    columns:
+      seller_id: Seller identifier.
+      seller_zip_code_prefix: First 5 digits of the seller's zip code (text).
+      seller_city: Seller city, lowercase.
+      seller_state: Two-letter Brazilian state code of the seller.
+
+  olist_products_dataset:
+    description: Product catalog. Category names are in Portuguese; translate with product_category_name_translation.
+    primary_key: [product_id]
+    foreign_keys:
+      product_category_name: product_category_name_translation.product_category_name
+    columns:
+      product_id: Product identifier.
+      product_category_name: Category in Portuguese (null for 610 products; 2 categories have no English translation).
+      product_name_length: Number of characters in the product name.
+      product_description_length: Number of characters in the product description.
+      product_photos_qty: Number of product photos.
+      product_weight_g: Weight in grams.
+      product_length_cm: Length in cm.
+      product_height_cm: Height in cm.
+      product_width_cm: Width in cm.
+
+  olist_geolocation_dataset:
+    description: >
+      Zip code prefix to lat/lng. Several rows per prefix (not unique), so aggregate
+      (e.g. AVG lat/lng per prefix) before joining to customers or sellers.
+    primary_key: []
+    foreign_keys: {}
+    columns:
+      geolocation_zip_code_prefix: First 5 digits of the zip code (text).
+      geolocation_lat: Latitude.
+      geolocation_lng: Longitude.
+      geolocation_city: City, lowercase.
+      geolocation_state: Two-letter state code.
+
+  product_category_name_translation:
+    description: Portuguese to English category names.
+    primary_key: [product_category_name]
+    foreign_keys: {}
+    columns:
+      product_category_name: Category in Portuguese (matches olist_products_dataset.product_category_name).
+      product_category_name_english: Category in English (e.g. health_beauty, bed_bath_table).

@@ -7,11 +7,10 @@ This is the only place that opens the database for writing. It runs fixed,
 trusted SQL only - never LLM-generated SQL.
 """
 
-from pathlib import Path
-
 import duckdb
 
-DATA_DIR = Path(__file__).parent / "data"
+from agentic_query import DATA_DIR
+
 DB_PATH = DATA_DIR / "olist.duckdb"
 
 

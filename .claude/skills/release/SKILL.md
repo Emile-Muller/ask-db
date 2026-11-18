@@ -29,7 +29,7 @@ Run the steps in order. If a step fails, **stop** and report it: no commit, no t
   - Any failure or error: stop and show the failing tests.
 - No tests: say so clearly and ask whether to release anyway. Never claim tests passed.
 - `CLAUDE.md` safety checks (must pass):
-  - Every `duckdb.connect(` outside `build_db.py` uses `read_only=True`.
+  - Every `duckdb.connect(` outside `agentic_query/build_db.py` uses `read_only=True`.
   - No hardcoded secrets (grep for `api_key\s*=\s*["']`, `sk-`, `token\s*=\s*["']`, `password\s*=\s*["']`).
   - `.env` and `.streamlit/secrets.toml` are in `.gitignore`.
 

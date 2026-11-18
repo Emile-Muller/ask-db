@@ -32,8 +32,9 @@ htmlcov/
 # Raw dataset (download from Kaggle, see data/data_source.md)
 data/*.csv
 
-# Logs
+# Logs and eval output
 *.log
+eval/last_run.json
 
 # IDE / OS
 .vscode/

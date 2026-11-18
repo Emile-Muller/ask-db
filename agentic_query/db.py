@@ -1,10 +1,10 @@
 """Read-only access to the Olist DuckDB database."""
 
-from pathlib import Path
-
 import duckdb
 
-DB_PATH = Path(__file__).parent / "data" / "olist.duckdb"
+from agentic_query import DATA_DIR
+
+DB_PATH = DATA_DIR / "olist.duckdb"
 
 
 # Read-only alone still lets SQL read arbitrary local files (read_csv, FROM 'x.csv'),
@@ -21,7 +21,9 @@ READ_ONLY_CONFIG = {
 def get_connection() -> duckdb.DuckDBPyConnection:
     """Open the database in read-only mode with external access disabled."""
     if not DB_PATH.exists():
-        raise FileNotFoundError(f"{DB_PATH} not found. Run `python build_db.py` first.")
+        raise FileNotFoundError(
+            f"{DB_PATH} not found. Run `python -m agentic_query.build_db` first."
+        )
     return duckdb.connect(str(DB_PATH), read_only=True, config=dict(READ_ONLY_CONFIG))
 
 
