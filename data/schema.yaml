@@ -2,7 +2,7 @@
 # (table/column names and types introspected from DuckDB) by agentic_query/schema.py.
 #
 # The database is built from CSVs, so DuckDB has no declared keys: primary and
-# foreign keys are declared here. tests/test_text_to_sql.py checks that every table and
+# foreign keys are declared here. tests/test_agentic_query.py checks that every table and
 # column below exists in the database and that every database column is described.
 
 dataset: >

@@ -25,16 +25,3 @@ def get_connection() -> duckdb.DuckDBPyConnection:
             f"{DB_PATH} not found. Run `python -m agentic_query.build_db` first."
         )
     return duckdb.connect(str(DB_PATH), read_only=True, config=dict(READ_ONLY_CONFIG))
-
-
-def first_products(n: int = 5):
-    """Return the first n rows of olist_products_dataset as a list of dicts."""
-    with get_connection() as con:
-        cur = con.execute("SELECT * FROM olist_products_dataset LIMIT ?", [n])
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row, strict=True)) for row in cur.fetchall()]
-
-
-if __name__ == "__main__":
-    for row in first_products():
-        print(row)

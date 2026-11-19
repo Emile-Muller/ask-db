@@ -32,6 +32,7 @@ QUESTIONS_PATH = EVAL_DIR / "questions.yaml"
 REPORT_PATH = EVAL_DIR / "last_run.json"
 CANNOT_ANSWER = "cannot answer from the available data"
 MAX_ROWS = 1000
+KINDS = ("question", "invalid_question", "instruction", "sql", "invalid_sql")
 
 
 # --- grading ---------------------------------------------------------------
@@ -135,6 +136,7 @@ def is_cannot_answer(res: QueryResult) -> bool:
 @dataclass
 class Outcome:
     id: str
+    kind: str
     question: str
     passed: bool
     reason: str
@@ -151,6 +153,13 @@ def load_questions(path: Path = QUESTIONS_PATH) -> list[dict]:
     dupes = [i for i, n in Counter(ids).items() if n > 1]
     if dupes:
         raise ValueError(f"duplicate question ids: {dupes}")
+    for q in items:
+        if q.get("kind") not in KINDS:
+            raise ValueError(f"{q['id']}: kind must be one of {KINDS}, got {q.get('kind')!r}")
+        if not str(q.get("question") or "").strip():
+            raise ValueError(f"{q['id']}: empty question")
+        if (q.get("expect") == "refuse") == bool(q.get("gold_sql")):
+            raise ValueError(f"{q['id']}: needs exactly one of gold_sql or expect: refuse")
     return items
 
 
@@ -158,7 +167,7 @@ def run_one(item: dict, client=None) -> Outcome:
     from agentic_query.text_to_sql import GenerationError, generate_sql  # imports the SDK
 
     start = time.perf_counter()
-    out = Outcome(item["id"], item["question"], False, "")
+    out = Outcome(item["id"], item["kind"], item["question"], False, "")
     try:
         out.generated_sql = generate_sql(item["question"], client)
         pred = run_query(out.generated_sql, max_rows=MAX_ROWS)
@@ -229,7 +238,12 @@ def main(argv: list[str] | None = None) -> int:
         if not o.passed and o.generated_sql:
             print("      " + o.generated_sql.replace("\n", "\n      "))
     passed = sum(o.passed for o in outcomes)
-    print(f"\n{passed}/{len(outcomes)} passed ({100 * passed / max(1, len(outcomes)):.0f}%)")
+    print()
+    for kind in KINDS:
+        of_kind = [o for o in outcomes if o.kind == kind]
+        if of_kind:
+            print(f"  {kind:<17} {sum(o.passed for o in of_kind)}/{len(of_kind)}")
+    print(f"{passed}/{len(outcomes)} passed ({100 * passed / max(1, len(outcomes)):.0f}%)")
 
     from agentic_query.text_to_sql import EFFORT, MODEL
 

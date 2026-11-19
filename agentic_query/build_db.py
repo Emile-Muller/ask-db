@@ -10,8 +10,7 @@ trusted SQL only - never LLM-generated SQL.
 import duckdb
 
 from agentic_query import DATA_DIR
-
-DB_PATH = DATA_DIR / "olist.duckdb"
+from agentic_query.db import DB_PATH
 
 
 def build() -> None:

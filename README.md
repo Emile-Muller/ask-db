@@ -35,7 +35,7 @@ agentic_query/   Python package (run modules with `python -m agentic_query.<modu
   eval.py        end-to-end eval against gold SQL
 data/            dataset CSVs, olist.duckdb, data_source.md, schema.yaml (table/column descriptions)
 eval/            questions.yaml (eval set)
-tests/           pytest suite
+tests/           test_agentic_query.py: offline checks of safety, pipeline and eval
 ```
 
 Run everything from the project root so `agentic_query` is importable.
@@ -60,11 +60,6 @@ python -m venv .venv
 `agentic_query/db.py` provides read-only access to the database:
 
 - `get_connection()`: opens `data/olist.duckdb` with `read_only=True`, external access disabled (no file reads, `ATTACH`, extension install/load) and the configuration locked so SQL cannot re-enable it. All queries go through this connection; only `build_db` writes to the database.
-- `first_products(n=5)`: returns the first `n` rows of `olist_products_dataset` as a list of dicts.
-
-```powershell
-.\.venv\Scripts\python.exe -m agentic_query.db   # prints the first 5 products
-```
 
 ## SQL guardrail
 
@@ -106,7 +101,7 @@ $env:ANTHROPIC_API_KEY = "..."   # in your own terminal; never commit it
 
 ## Eval
 
-`eval/questions.yaml` holds 30 showcase questions: 28 with a hand-written gold SQL answer, plus 2 that must be refused (a delete request and a prompt injection). `agentic_query/eval.py` sends each question through the whole chain and compares the result with the gold result: same row count, and each gold column matches a generated column (numbers within 0.01 / 0.1%, order checked only for rankings and time series, column names and extra columns ignored). Refusal questions pass if the guardrail rejects the SQL or the model returns its *"Cannot answer"* row.
+`eval/questions.yaml` holds 30 test inputs in five kinds: 11 answerable questions, 5 invalid questions (not answerable from the data, off-topic), 5 instructions (write requests, prompt injection, secret or file grabs), 4 pasted valid SQL queries and 5 pasted invalid SQL queries (unsafe, unknown table, typos, a `DELETE` chained on). Each has a hand-written gold SQL answer or `expect: refuse`; instructions and invalid SQL that hide a legitimate read-only request must still answer it. `agentic_query/eval.py` sends each question through the whole chain and compares the result with the gold result: same row count, and each gold column matches a generated column (numbers within 0.01 / 0.1%, order checked only for rankings and time series, column names and extra columns ignored). Refusal questions pass if the guardrail rejects the SQL or the model returns its *"Cannot answer"* row.
 
 ```powershell
 .\.venv\Scripts\python.exe -m agentic_query.eval --gold-only   # check the gold SQL only (no API calls)
@@ -114,13 +109,23 @@ $env:ANTHROPIC_API_KEY = "..."   # in your own terminal; never commit it
 .\.venv\Scripts\python.exe -m agentic_query.eval --only top_categories_revenue avg_review_score
 ```
 
-In Claude Code, `/eval` runs it and explains each failure (`/eval gold` for the free gold check, `/eval <id> ...` for some questions).
+In Claude Code, `/eval <question>` turns one input into guardrail-approved SQL through `.claude/skills/eval/guard.py`; any input from `eval/questions.yaml` can be pasted as is. The offline tests check the set: every gold query passes the guardrail, pasted valid SQL is its own answer, pasted invalid SQL fails as written, and grading passes each case for a correct answer and fails it for a wrong one.
 
 ## Releasing
 
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 0.6.0 — 2026-11-19
+- Rework the eval set: 30 inputs in five kinds (`question`, `invalid_question`, `instruction`, `sql`, `invalid_sql`), each with gold SQL or `expect: refuse`
+- `eval.py` validates each case (known kind, non-empty input, exactly one of `gold_sql` / `expect: refuse`) and prints a score per kind
+- `/eval` skill now turns one question into guardrail-approved SQL via the new `.claude/skills/eval/guard.py` (runs `sql_guard.run_query`, prints JSON)
+- **Changed:** `/eval` no longer runs the full eval set; run it with `python -m agentic_query.eval`
+- Merge `tests/test_sql_guard.py` and `tests/test_text_to_sql.py` into `tests/test_agentic_query.py` (safety, pipeline, eval set and guard script checks)
+- Remove `first_products()` demo from `db.py`; `build_db.py` reuses `db.DB_PATH`
+- README updates for the eval set, `/eval` skill, tests and `db.py`
+- `/release` skill writes the commit message to a file and commits with `git commit -F <file>` (fixes PowerShell here-string failure)
 
 ### 0.5.0 — 2026-11-18
 - Add text-to-SQL pipeline `agentic_query/text_to_sql.py`: `generate_sql()` asks Claude for one SELECT, `ask()` runs it through the guardrail

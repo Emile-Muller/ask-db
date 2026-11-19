@@ -57,6 +57,13 @@ so they go in the same commit.
 
   - <same bullets as the README history entry>
   ```
+- Pass the multi-line message through a file, never inline:
+  1. Write it with the Write tool to `commit_msg.txt` in the session scratchpad directory (not the repo,
+     so `git status` stays clean).
+  2. `git commit -F "<absolute path to commit_msg.txt>"`.
+  - Do **not** use `git commit -F - @'...'@` in PowerShell: the here-string becomes a pathspec argument,
+    not stdin, so git fails with `pathspec ... did not match any file(s)`. Avoid stacking multiple `-m`
+    flags too (bullets with backticks/quotes break the quoting).
 - The pre-commit hook (ruff lint + format) runs on this commit. If it fails or modifies files, the
   commit is not made: show the output, and if it only reformatted/auto-fixed files, re-stage them
   (`git add -A`) and commit again once. Never bypass it with `--no-verify`.
