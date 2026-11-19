@@ -35,6 +35,7 @@ data/*.csv
 # Logs and eval output
 *.log
 eval/last_run.json
+eval/last_skill_run.json
 
 # IDE / OS
 .vscode/

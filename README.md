@@ -109,13 +109,18 @@ $env:ANTHROPIC_API_KEY = "..."   # in your own terminal; never commit it
 .\.venv\Scripts\python.exe -m agentic_query.eval --only top_categories_revenue avg_review_score
 ```
 
-In Claude Code, `/eval <question>` turns one input into guardrail-approved SQL through `.claude/skills/eval/guard.py`; any input from `eval/questions.yaml` can be pasted as is. `eval/results.json` is a showcase of the skill: one `/eval` run over all 30 inputs, with the approved SQL and a result preview for each (16 answered, 14 refused). It is a committed sample, not the `eval.py` report (that one goes to the gitignored `eval/last_run.json`). The offline tests check the set: every gold query passes the guardrail, pasted valid SQL is its own answer, pasted invalid SQL fails as written, and grading passes each case for a correct answer and fails it for a wrong one.
+In Claude Code, `/eval <question>` turns one input into guardrail-approved SQL through `.claude/skills/eval/guard.py`, which also saves its last result (submitted SQL, approved SQL, preview or error) to the gitignored `eval/last_skill_run.json`; any input from `eval/questions.yaml` can be pasted as is. `eval/results.json` is a showcase of the skill: one `/eval` run over all 30 inputs, with the approved SQL and a result preview for each (16 answered, 14 refused). It is a committed sample, not the `eval.py` report (that one goes to the gitignored `eval/last_run.json`). The offline tests check the set: every gold query passes the guardrail, pasted valid SQL is its own answer, pasted invalid SQL fails as written, and grading passes each case for a correct answer and fails it for a wrong one.
 
 ## Releasing
 
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 0.6.2 — 2026-11-19
+- `.claude/skills/eval/guard.py` split into `check()` + `write_report()`; each run (timestamp, submitted SQL, result or error) is saved to `eval/last_skill_run.json`, overwritten every run
+- A failed report write only prints a warning on stderr and does not change the guard result
+- Ignore `eval/last_skill_run.json`; README `/eval` section documents the new report file
 
 ### 0.6.1 — 2026-11-19
 - Refuse the whole input on any prompt injection, non-SELECT or `;`-chained statement, or file/secret request, even when a legitimate question is mixed in (system prompt in `text_to_sql.py` and `/eval` skill)
