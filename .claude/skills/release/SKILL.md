@@ -40,14 +40,14 @@ and writes the `## Version history` entry from the commits since the last tag **
 It does not stage, commit or tag.
 
 Check its result: `VERSION` holds the new version and README has the new entry at the top of the history.
-If other docs (`README.md` usage/setup, `CLAUDE.md`, `data/data_source.md`) no longer match the code, fix them now
+If other docs (`README.md` usage/setup, `CLAUDE.md`, `data/README.md`) no longer match the code, fix them now
 so they go in the same commit.
 
 ## 4. Stage everything
 - `git add -A`
 - Review what is staged: `git diff --cached --stat` and `git diff --cached --name-only`.
 - Safety: if a staged file is a secret or local-only file (`.env`, `.streamlit/secrets.toml`, `.venv/`,
-  `*.duckdb`, raw CSVs under `data/`) or a diff contains a key/token, stop: unstage it
+  `*.duckdb`, raw CSVs under `data/raw/`) or a diff contains a key/token, stop: unstage it
   (`git restore --staged <path>`) and ask the user (it probably belongs in `.gitignore`).
 
 ## 5. Single commit

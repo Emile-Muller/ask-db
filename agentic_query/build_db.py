@@ -1,7 +1,7 @@
-"""Build data/olist.duckdb from the Olist CSV files in data/.
+"""Build data/olist.duckdb from the Olist CSV files in data/raw/.
 
 One table per CSV, named after the file without the .csv extension
-(e.g. data/olist_products_dataset.csv -> table olist_products_dataset).
+(e.g. data/raw/olist_products_dataset.csv -> table olist_products_dataset).
 
 This is the only place that opens the database for writing. It runs fixed,
 trusted SQL only - never LLM-generated SQL.
@@ -9,14 +9,13 @@ trusted SQL only - never LLM-generated SQL.
 
 import duckdb
 
-from agentic_query import DATA_DIR
-from agentic_query.db import DB_PATH
+from agentic_query import DB_PATH, RAW_DIR
 
 
 def build() -> None:
-    csv_files = sorted(DATA_DIR.glob("*.csv"))
+    csv_files = sorted(RAW_DIR.glob("*.csv"))
     if not csv_files:
-        raise SystemExit(f"No CSV files in {DATA_DIR}. See data/data_source.md.")
+        raise SystemExit(f"No CSV files in {RAW_DIR}. See data/README.md.")
 
     with duckdb.connect(str(DB_PATH)) as con:
         for csv in csv_files:

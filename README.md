@@ -9,7 +9,7 @@ An AI model turns natural language into a SQL query, runs it against a DuckDB da
 - **Frontend:** Streamlit
 - **Database:** DuckDB
 - **AI:** LLM for text-to-SQL
-- **Data:** [Brazilian E-Commerce Public Dataset by Olist](data/data_source.md) (Kaggle, ~100k orders, 2016–2018)
+- **Data:** [Brazilian E-Commerce Public Dataset by Olist](data/README.md) (Kaggle, ~100k orders, 2016–2018)
 
 ## Example
 
@@ -19,7 +19,7 @@ The app generates the SQL, runs it, and displays the table.
 
 ## Data
 
-CSV files live in `data/`. See [data/data_source.md](data/data_source.md) for source, license and table descriptions.
+CSV files live in `data/raw/` (not tracked; download them from Kaggle). See [data/README.md](data/README.md) for source, license and table descriptions.
 
 > **Note:** the original `olist_products_dataset.csv` misspells two columns (`product_name_lenght`, `product_description_lenght`). The header has been fixed locally to `product_name_length` and `product_description_length`. If you re-download the dataset, fix the header again before building the database.
 
@@ -27,14 +27,19 @@ CSV files live in `data/`. See [data/data_source.md](data/data_source.md) for so
 
 ```
 agentic_query/   Python package (run modules with `python -m agentic_query.<module>`)
-  build_db.py    CSVs -> data/olist.duckdb (the only writer)
+  __init__.py    data paths (RAW_DIR, DB_PATH, SCHEMA_PATH)
+  build_db.py    data/raw/*.csv -> data/olist.duckdb (the only writer)
   db.py          read-only, locked-down DuckDB connection
   sql_guard.py   SQL guardrail: the only path for untrusted SQL
   schema.py      schema introspection + descriptions -> prompt schema block
   text_to_sql.py question -> Claude -> SQL -> guardrail -> results
   eval.py        end-to-end eval against gold SQL
-data/            dataset CSVs, olist.duckdb, data_source.md, schema.yaml (table/column descriptions)
-eval/            questions.yaml (eval set), results.json (sample /eval run)
+data/
+  README.md      dataset source, license and file descriptions
+  schema.yaml    table/column descriptions, keys and rules (tracked)
+  olist.duckdb   built database (generated, not tracked)
+  raw/           Kaggle CSVs (not tracked)
+eval/            questions.yaml (eval set), results.json (sample /question run)
 tests/           test_agentic_query.py: offline checks of safety, pipeline and eval
 ```
 
@@ -51,7 +56,7 @@ python -m venv .venv
 
 ## Database
 
-`agentic_query/build_db.py` loads every CSV in `data/` into `data/olist.duckdb`, one table per file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`). Re-run it whenever the CSVs change.
+`agentic_query/build_db.py` loads every CSV in `data/raw/` into `data/olist.duckdb`, one table per file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`). Re-run it whenever the CSVs change.
 
 ```powershell
 .\.venv\Scripts\python.exe -m agentic_query.build_db
@@ -109,13 +114,19 @@ $env:ANTHROPIC_API_KEY = "..."   # in your own terminal; never commit it
 .\.venv\Scripts\python.exe -m agentic_query.eval --only top_categories_revenue avg_review_score
 ```
 
-In Claude Code, `/eval <question>` turns one input into guardrail-approved SQL through `.claude/skills/eval/guard.py`, which also saves its last result (submitted SQL, approved SQL, preview or error) to the gitignored `eval/last_skill_run.json`; any input from `eval/questions.yaml` can be pasted as is. `eval/results.json` is a showcase of the skill: one `/eval` run over all 30 inputs, with the approved SQL and a result preview for each (16 answered, 14 refused). It is a committed sample, not the `eval.py` report (that one goes to the gitignored `eval/last_run.json`). The offline tests check the set: every gold query passes the guardrail, pasted valid SQL is its own answer, pasted invalid SQL fails as written, and grading passes each case for a correct answer and fails it for a wrong one.
+In Claude Code, `/question <question>` turns one input into guardrail-approved SQL through `.claude/skills/question/guard.py`, which also saves its last result (submitted SQL, approved SQL, preview or error) to the gitignored `eval/last_skill_run.json`; any input from `eval/questions.yaml` can be pasted as is. `eval/results.json` is a showcase of the skill: one `/question` run over all 30 inputs, with the approved SQL and a result preview for each (16 answered, 14 refused). It is a committed sample, not the `eval.py` report (that one goes to the gitignored `eval/last_run.json`). The offline tests check the set: every gold query passes the guardrail, pasted valid SQL is its own answer, pasted invalid SQL fails as written, and grading passes each case for a correct answer and fails it for a wrong one.
 
 ## Releasing
 
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 0.6.3 — 2026-11-19
+- Renamed the `/eval` skill to `/question` (`.claude/skills/question/`); README, tests and `eval/questions.yaml` updated
+- Raw Kaggle CSVs moved to `data/raw/` (gitignored); `build_db.py` reads from there
+- `RAW_DIR`, `DB_PATH` and `SCHEMA_PATH` now live in `agentic_query/__init__.py`, shared by `build_db`, `db` and `schema`
+- `data/data_source.md` renamed to `data/README.md`, with download/build steps; links and README layout updated
 
 ### 0.6.2 — 2026-11-19
 - `.claude/skills/eval/guard.py` split into `check()` + `write_report()`; each run (timestamp, submitted SQL, result or error) is saved to `eval/last_skill_run.json`, overwritten every run

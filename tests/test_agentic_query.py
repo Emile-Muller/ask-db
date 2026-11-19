@@ -4,7 +4,7 @@
    statements, touch files or settings, and it runs on a read-only, locked connection.
 2. Pipeline: question -> prompt (instructions + schema) -> SQL -> guardrail -> DuckDB.
 3. Eval: every case in eval/questions.yaml is consistent, and grading passes a correct
-   answer and fails a wrong one. The /eval skill's guard.py reports what the guardrail says.
+   answer and fails a wrong one. The /question skill's guard.py reports what the guardrail says.
 
 Tests marked needs_db are skipped until `python -m agentic_query.build_db` has been run.
 """
@@ -26,7 +26,7 @@ from agentic_query import eval as ev  # noqa: E402
 from agentic_query import text_to_sql as t2s  # noqa: E402
 from agentic_query.sql_guard import QueryResult, UnsafeQueryError, run_query, validate_sql  # noqa: E402
 
-GUARD_SCRIPT = ROOT / ".claude" / "skills" / "eval" / "guard.py"
+GUARD_SCRIPT = ROOT / ".claude" / "skills" / "question" / "guard.py"
 CANNOT_ANSWER_SQL = "SELECT 'Cannot answer from the available data' AS error"
 TABLES = {"olist_orders_dataset", "olist_products_dataset"}
 
@@ -106,8 +106,8 @@ def test_guard_allows_read_only_selects(sql):
         "DESCRIBE olist_orders_dataset",
         "SUMMARIZE olist_orders_dataset",
         # files, environment, dynamic SQL
-        "SELECT * FROM read_csv('data/olist_orders_dataset.csv')",
-        "SELECT * FROM 'data/olist_orders_dataset.csv'",
+        "SELECT * FROM read_csv('data/raw/olist_orders_dataset.csv')",
+        "SELECT * FROM 'data/raw/olist_orders_dataset.csv'",
         "SELECT * FROM read_parquet('x.parquet')",
         "SELECT * FROM glob('*')",
         "SELECT * FROM query('DROP TABLE x')",
@@ -151,7 +151,7 @@ def test_connection_is_read_only_and_locked():
     with db.get_connection() as con:
         for sql in (
             "CREATE TABLE t AS SELECT 1",
-            "SELECT * FROM read_csv('data/olist_orders_dataset.csv')",
+            "SELECT * FROM read_csv('data/raw/olist_orders_dataset.csv')",
             "SET enable_external_access = true",
         ):
             with pytest.raises(duckdb.Error):
@@ -233,7 +233,7 @@ def test_ask_runs_model_sql_through_guardrail():
     [
         "DROP TABLE olist_orders_dataset",
         "SELECT 1; DELETE FROM olist_orders_dataset",
-        "SELECT * FROM read_csv('data/olist_orders_dataset.csv')",
+        "SELECT * FROM read_csv('data/raw/olist_orders_dataset.csv')",
         "Sure! The query is: SELECT 1",
     ],
 )
@@ -324,7 +324,7 @@ def test_compare_check_limits_columns():
     ],
 )
 def test_skill_guard_script(tmp_path, sql, ok, stage):
-    """The /eval skill runs its SQL only through guard.py, from a file."""
+    """The /question skill runs its SQL only through guard.py, from a file."""
     sql_file = tmp_path / "query.sql"
     sql_file.write_text(sql, encoding="utf-8-sig")  # editors on Windows may add a BOM
     proc = subprocess.run(  # noqa: S603 - fixed args: this interpreter + repo script

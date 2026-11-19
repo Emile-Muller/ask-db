@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Text-to-SQL app: natural language → SQL (via LLM) → DuckDB → results in Streamlit.
-Dataset: Olist Brazilian E-Commerce (see `data/data_source.md`).
+Dataset: Olist Brazilian E-Commerce (see `data/README.md`).
 
 ## Safety rules (must follow)
 

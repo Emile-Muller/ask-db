@@ -27,6 +27,10 @@ After a purchase, the seller is notified to fulfill the order. Once the customer
 
 ## Files
 
+Download the CSVs from Kaggle into `data/raw/` (not tracked by git), then run
+`python -m agentic_query.build_db` to build `data/olist.duckdb`. Table and column
+descriptions used in the prompt live in `data/schema.yaml`.
+
 | File | Description | Key columns |
 |---|---|---|
 | `olist_orders_dataset.csv` | Orders (central table) | `order_id`, `customer_id` |

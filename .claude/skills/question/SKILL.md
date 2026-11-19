@@ -1,5 +1,5 @@
 ---
-name: eval
+name: question
 description: Turn one natural-language question about the Olist database into a DuckDB SQL query, check it with the SQL guardrail (agentic_query.sql_guard), and return the approved SQL. Use when the user asks for the SQL that answers a question about the data.
 argument-hint: "<question about the database content>"
 disable-model-invocation: true
@@ -43,7 +43,7 @@ Apply the same rules as `INSTRUCTIONS` in `agentic_query/text_to_sql.py`:
 ## 4. Pass it through the guardrail
 - Write the SQL to a file in your scratchpad directory (for example `query.sql`), not on the
   command line.
-- Run `.\.venv\Scripts\python.exe .claude\skills\eval\guard.py <scratchpad>\query.sql`.
+- Run `.\.venv\Scripts\python.exe .claude\skills\question\guard.py <scratchpad>\query.sql`.
   The script calls `agentic_query.sql_guard.run_query`, which validates the SQL and runs it on
   the read-only connection. It prints JSON.
 - `"ok": false`: read `error` (`stage` is `guardrail` or `duckdb`), fix the SQL and run the

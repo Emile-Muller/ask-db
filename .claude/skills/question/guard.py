@@ -1,7 +1,7 @@
 """Send candidate SQL through agentic_query.sql_guard.run_query and report the result.
 
 Usage (from the repo root):
-    .\\.venv\\Scripts\\python.exe .claude\\skills\\eval\\guard.py <sql_file>
+    .\\.venv\\Scripts\\python.exe .claude\\skills\\question\\guard.py <sql_file>
 
 The SQL is read from a file so it never has to be quoted on the command line.
 Prints JSON and saves it, with the submitted SQL and a timestamp, to

@@ -29,8 +29,8 @@ htmlcov/
 *.duckdb.wal
 *.db
 
-# Raw dataset (download from Kaggle, see data/data_source.md)
-data/*.csv
+# Raw dataset (download from Kaggle, see data/README.md)
+data/raw/
 
 # Logs and eval output
 *.log

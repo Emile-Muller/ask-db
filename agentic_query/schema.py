@@ -15,10 +15,8 @@ from pathlib import Path
 
 import yaml
 
-from agentic_query import DATA_DIR
+from agentic_query import SCHEMA_PATH
 from agentic_query.db import get_connection
-
-DESCRIPTIONS_PATH = DATA_DIR / "schema.yaml"
 
 
 @dataclass(frozen=True)
@@ -53,7 +51,7 @@ def introspect(con) -> dict[str, list[tuple[str, str]]]:
     return tables
 
 
-def load_descriptions(path: Path = DESCRIPTIONS_PATH) -> dict:
+def load_descriptions(path: Path = SCHEMA_PATH) -> dict:
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 

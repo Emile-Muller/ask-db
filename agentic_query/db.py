@@ -2,10 +2,7 @@
 
 import duckdb
 
-from agentic_query import DATA_DIR
-
-DB_PATH = DATA_DIR / "olist.duckdb"
-
+from agentic_query import DB_PATH
 
 # Read-only alone still lets SQL read arbitrary local files (read_csv, FROM 'x.csv'),
 # ATTACH other databases or INSTALL/LOAD extensions. Disable external access and

@@ -1,4 +1,4 @@
-# Eval set for the text-to-SQL pipeline and the /eval skill: input -> expected result.
+# Eval set for the text-to-SQL pipeline and the /question skill: input -> expected result.
 #
 # Fields:
 #   id        unique slug
