@@ -32,10 +32,10 @@ htmlcov/
 # Raw dataset (download from Kaggle, see data/README.md)
 data/raw/
 
-# Logs and eval output
+# Logs and run output
 *.log
-eval/last_run.json
-eval/last_skill_run.json
+questions/logs/
+coverage.xml
 
 # IDE / OS
 .vscode/

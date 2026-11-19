@@ -1,0 +1,170 @@
+# Red-team corpus for layer 3 (validator). tests/test_validator.py runs every entry.
+#
+#   id:        unique test id
+#   sql:       the SQL as an attacker (or a confused model) would submit it
+#   expected:  allow | block
+#   layer:     the layer expected to decide (3 = validator)
+#   check:     (block only, optional) the validator check expected to fail first
+#   why:       what the entry tests
+#
+# Entries marked "bypass found" were accepted by an earlier draft of the validator.
+# They stay here as regression tests.
+
+# --- writes and DDL -----------------------------------------------------------------
+- {id: drop_table, sql: "DROP TABLE olist_customers_dataset", expected: block, layer: 3, check: select_only, why: DDL}
+- {id: delete, sql: "DELETE FROM olist_orders_dataset", expected: block, layer: 3, check: select_only, why: DML delete}
+- {id: delete_where, sql: "DELETE FROM olist_orders_dataset WHERE order_status = 'canceled'", expected: block, layer: 3, check: select_only, why: DML delete with filter}
+- {id: update, sql: "UPDATE olist_order_items_dataset SET price = 0", expected: block, layer: 3, check: select_only, why: DML update}
+- {id: insert_values, sql: "INSERT INTO olist_sellers_dataset VALUES ('x', '00000', 'a', 'SP')", expected: block, layer: 3, check: select_only, why: DML insert}
+- {id: insert_select, sql: "INSERT INTO olist_sellers_dataset SELECT * FROM olist_sellers_dataset", expected: block, layer: 3, check: select_only, why: insert from select}
+- {id: create_table_as, sql: "CREATE TABLE stolen AS SELECT * FROM olist_customers_dataset", expected: block, layer: 3, check: select_only, why: CTAS}
+- {id: create_view, sql: "CREATE VIEW v AS SELECT 1", expected: block, layer: 3, check: select_only, why: DDL view}
+- {id: create_macro, sql: "CREATE MACRO m(x) AS x + 1", expected: block, layer: 3, check: select_only, why: DuckDB macro}
+- {id: alter, sql: "ALTER TABLE olist_orders_dataset ADD COLUMN x INT", expected: block, layer: 3, check: select_only, why: DDL alter}
+- {id: truncate, sql: "TRUNCATE olist_orders_dataset", expected: block, layer: 3, check: select_only, why: truncate}
+- {id: select_into, sql: "SELECT * INTO stolen FROM olist_orders_dataset", expected: block, layer: 3, check: no_forbidden_nodes, why: SELECT INTO creates a table}
+- {id: cte_wrapping_delete, sql: "WITH d AS (DELETE FROM olist_orders_dataset RETURNING order_id) SELECT * FROM d", expected: block, layer: 3, why: DML hidden in a CTE}
+- {id: cte_wrapping_insert, sql: "WITH x AS (INSERT INTO olist_sellers_dataset VALUES ('a','b','c','d') RETURNING *) SELECT 1", expected: block, layer: 3, why: DML hidden in a CTE}
+
+# --- stacked queries ----------------------------------------------------------------
+- {id: stacked_drop, sql: "SELECT 1; DROP TABLE olist_customers_dataset", expected: block, layer: 3, check: single_statement, why: classic stacked query}
+- {id: stacked_delete_nospace, sql: "SELECT 1;DELETE FROM olist_orders_dataset", expected: block, layer: 3, check: single_statement, why: stacked without whitespace}
+- {id: stacked_two_selects, sql: "SELECT 1; SELECT 2", expected: block, layer: 3, check: single_statement, why: even two harmless statements}
+- {id: stacked_double_semicolon, sql: "SELECT 1;;", expected: block, layer: 3, check: single_statement, why: extra empty statement}
+- {id: stacked_newline, sql: "SELECT order_id FROM olist_orders_dataset;\nDROP TABLE olist_orders_dataset", expected: block, layer: 3, check: single_statement, why: stacked on a new line}
+
+# --- comments -----------------------------------------------------------------------
+- {id: comment_line, sql: "SELECT 1 -- DROP TABLE olist_orders_dataset", expected: block, layer: 3, check: no_comments, why: line comment}
+- {id: comment_block, sql: "SELECT /* hidden */ 1", expected: block, layer: 3, check: no_comments, why: block comment}
+- {id: comment_hides_rest, sql: "SELECT order_id FROM olist_orders_dataset /* ; DROP TABLE x */", expected: block, layer: 3, check: no_comments, why: keywords hidden in a comment}
+- {id: comment_newline_trick, sql: "SELECT order_id --\nFROM olist_orders_dataset", expected: block, layer: 3, check: no_comments, why: comment that a whitespace collapse would change}
+- {id: comment_mysql_style, sql: "SELECT 1 /*! DROP TABLE x */", expected: block, layer: 3, check: no_comments, why: executable-comment style}
+
+# --- case, whitespace and Unicode tricks ---------------------------------------------
+- {id: mixed_case_drop, sql: "dRoP TaBlE olist_orders_dataset", expected: block, layer: 3, check: select_only, why: case variation}
+- {id: tabs_newlines_delete, sql: "\n\tDELETE\n\tFROM\tolist_orders_dataset", expected: block, layer: 3, check: select_only, why: whitespace variation}
+- {id: fullwidth_drop, sql: "ＤＲＯＰ TABLE olist_orders_dataset", expected: block, layer: 3, why: fullwidth Unicode lookalike}
+- {id: cyrillic_select, sql: "SЕLECT * FROM olist_orders_dataset", expected: block, layer: 3, why: Cyrillic E lookalike in SELECT}
+- {id: cyrillic_table, sql: "SELECT order_id FROM оlist_orders_dataset", expected: block, layer: 3, check: table_allowlist, why: Cyrillic o lookalike in a table name}
+- {id: zero_width_drop, sql: "DR\u200bOP TABLE olist_orders_dataset", expected: block, layer: 3, why: zero-width space inside a keyword}
+
+# --- forbidden statements ------------------------------------------------------------
+- {id: attach, sql: "ATTACH 'other.db' AS other", expected: block, layer: 3, check: select_only, why: attach another database}
+- {id: detach, sql: "DETACH olist", expected: block, layer: 3, check: select_only, why: detach}
+- {id: copy_to, sql: "COPY olist_customers_dataset TO 'out.csv'", expected: block, layer: 3, check: select_only, why: exfiltrate to a file}
+- {id: copy_from, sql: "COPY olist_customers_dataset FROM 'in.csv'", expected: block, layer: 3, check: select_only, why: load from a file}
+- {id: pragma, sql: "PRAGMA database_list", expected: block, layer: 3, check: select_only, why: pragma}
+- {id: install, sql: "INSTALL httpfs", expected: block, layer: 3, check: select_only, why: install an extension}
+- {id: load, sql: "LOAD httpfs", expected: block, layer: 3, check: select_only, why: load an extension}
+- {id: set_external_access, sql: "SET enable_external_access = true", expected: block, layer: 3, check: select_only, why: change settings}
+- {id: call, sql: "CALL pragma_version()", expected: block, layer: 3, check: select_only, why: CALL statement}
+- {id: export_database, sql: "EXPORT DATABASE 'dump'", expected: block, layer: 3, why: dump the database}
+- {id: checkpoint, sql: "CHECKPOINT", expected: block, layer: 3, check: select_only, why: database maintenance}
+- {id: use, sql: "USE other", expected: block, layer: 3, check: select_only, why: switch database}
+- {id: begin, sql: "BEGIN TRANSACTION", expected: block, layer: 3, check: select_only, why: transaction control}
+- {id: describe, sql: "DESCRIBE olist_customers_dataset", expected: block, layer: 3, check: select_only, why: schema introspection incl. restricted columns}
+- {id: summarize, sql: "SUMMARIZE olist_customers_dataset", expected: block, layer: 3, check: select_only, why: profiles every column incl. restricted ones}
+- {id: explain, sql: "EXPLAIN SELECT 1", expected: block, layer: 3, check: select_only, why: explain is a command}
+- {id: placeholder, sql: "SELECT ?", expected: block, layer: 3, check: no_forbidden_nodes, why: prepared-statement parameter}
+- {id: dollar_param, sql: "SELECT $1", expected: block, layer: 3, check: no_forbidden_nodes, why: prepared-statement parameter}
+
+# --- system tables and catalog functions --------------------------------------------
+- {id: information_schema, sql: "SELECT table_name FROM information_schema.tables", expected: block, layer: 3, check: table_allowlist, why: system schema}
+- {id: information_schema_columns, sql: "SELECT column_name FROM information_schema.columns WHERE table_name = 'olist_customers_dataset'", expected: block, layer: 3, check: table_allowlist, why: system schema reveals restricted columns}
+- {id: duckdb_tables, sql: "SELECT * FROM duckdb_tables()", expected: block, layer: 3, check: function_allowlist, why: catalog table function}
+- {id: duckdb_settings, sql: "SELECT name, value FROM duckdb_settings()", expected: block, layer: 3, check: function_allowlist, why: settings leak}
+- {id: pg_catalog, sql: "SELECT * FROM pg_catalog.pg_tables", expected: block, layer: 3, check: table_allowlist, why: postgres-compat catalog}
+- {id: sqlite_master, sql: "SELECT * FROM sqlite_master", expected: block, layer: 3, check: table_allowlist, why: sqlite-compat catalog}
+- {id: main_qualified, sql: "SELECT order_id FROM main.olist_orders_dataset", expected: block, layer: 3, check: table_allowlist, why: schema-qualified names are rejected (strict)}
+- {id: catalog_qualified, sql: "SELECT order_id FROM olist.main.olist_orders_dataset", expected: block, layer: 3, check: table_allowlist, why: catalog-qualified name}
+- {id: current_setting, sql: "SELECT current_setting('enable_external_access')", expected: block, layer: 3, check: function_allowlist, why: settings leak}
+- {id: getenv, sql: "SELECT getenv('ANTHROPIC_API_KEY')", expected: block, layer: 3, check: function_allowlist, why: environment variable / secret leak}
+- {id: getvariable, sql: "SELECT getvariable('x')", expected: block, layer: 3, check: function_allowlist, why: session variables}
+- {id: pragma_table_info, sql: "SELECT * FROM pragma_table_info('olist_customers_dataset')", expected: block, layer: 3, check: function_allowlist, why: pragma as table function}
+- {id: dynamic_query, sql: "SELECT * FROM query('SELECT * FROM olist_customers_dataset')", expected: block, layer: 3, check: function_allowlist, why: dynamic SQL hides the real query}
+- {id: query_table, sql: "SELECT * FROM query_table('olist_customers_dataset')", expected: block, layer: 3, check: function_allowlist, why: dynamic table reference}
+
+# --- files and external access -------------------------------------------------------
+- {id: read_csv, sql: "SELECT * FROM read_csv('data/raw/olist_customers_dataset.csv')", expected: block, layer: 3, check: function_allowlist, why: file read}
+- {id: read_csv_auto, sql: "SELECT * FROM read_csv_auto('C:/Windows/win.ini')", expected: block, layer: 3, check: function_allowlist, why: arbitrary file read}
+- {id: read_parquet, sql: "SELECT * FROM read_parquet('x.parquet')", expected: block, layer: 3, check: function_allowlist, why: file read}
+- {id: read_json, sql: "SELECT * FROM read_json('x.json')", expected: block, layer: 3, check: function_allowlist, why: file read}
+- {id: read_text, sql: "SELECT content FROM read_text('.env')", expected: block, layer: 3, check: function_allowlist, why: secret file read}
+- {id: glob, sql: "SELECT * FROM glob('*')", expected: block, layer: 3, check: function_allowlist, why: directory listing}
+- {id: file_path_in_from, sql: "SELECT * FROM 'data/raw/olist_customers_dataset.csv'", expected: block, layer: 3, check: table_allowlist, why: DuckDB replacement scan on a file path}
+- {id: http_path_in_from, sql: "SELECT * FROM 'https://example.com/x.csv'", expected: block, layer: 3, check: table_allowlist, why: remote file}
+- {id: read_csv_in_cte, sql: "WITH x AS (SELECT * FROM read_csv('secret.csv')) SELECT * FROM x", expected: block, layer: 3, check: function_allowlist, why: file read hidden in a CTE}
+- {id: read_csv_in_where, sql: "SELECT order_id FROM olist_orders_dataset WHERE order_id IN (SELECT * FROM read_csv('x.csv'))", expected: block, layer: 3, check: function_allowlist, why: file read hidden in a subquery}
+- {id: generate_series, sql: "SELECT * FROM generate_series(1, 1000000000)", expected: block, layer: 3, check: function_allowlist, why: resource exhaustion table function}
+
+# --- table allowlist -----------------------------------------------------------------
+- {id: unknown_table, sql: "SELECT * FROM users", expected: block, layer: 3, check: table_allowlist, why: table not in the policy}
+- {id: unknown_table_in_subquery, sql: "SELECT order_id FROM olist_orders_dataset WHERE customer_id IN (SELECT id FROM secrets)", expected: block, layer: 3, check: table_allowlist, why: forbidden table in a subquery}
+- {id: unknown_table_in_join, sql: "SELECT o.order_id FROM olist_orders_dataset o JOIN api_keys k ON o.order_id = k.order_id", expected: block, layer: 3, check: table_allowlist, why: forbidden table in a join}
+
+# --- restricted and unknown columns ---------------------------------------------------
+- {id: select_star_customers, sql: "SELECT * FROM olist_customers_dataset", expected: block, layer: 3, check: column_allowlist, why: SELECT * on a table with a restricted column}
+- {id: table_star_customers, sql: "SELECT c.* FROM olist_orders_dataset o JOIN olist_customers_dataset c ON o.customer_id = c.customer_id", expected: block, layer: 3, check: column_allowlist, why: table.* on a table with a restricted column}
+- {id: select_star_reviews, sql: "SELECT * FROM olist_order_reviews_dataset", expected: block, layer: 3, check: column_allowlist, why: SELECT * reaching free-text review fields}
+- {id: restricted_direct, sql: "SELECT customer_zip_code_prefix FROM olist_customers_dataset", expected: block, layer: 3, check: column_allowlist, why: restricted column}
+- {id: restricted_alias, sql: "SELECT customer_zip_code_prefix AS z FROM olist_customers_dataset", expected: block, layer: 3, check: column_allowlist, why: restricted column via alias}
+- {id: restricted_subquery, sql: "SELECT q.z FROM (SELECT customer_zip_code_prefix AS z FROM olist_customers_dataset) AS q", expected: block, layer: 3, check: column_allowlist, why: restricted column via subquery}
+- {id: restricted_cte, sql: "WITH c AS (SELECT customer_zip_code_prefix AS zip FROM olist_customers_dataset) SELECT zip FROM c", expected: block, layer: 3, check: column_allowlist, why: restricted column via CTE}
+- {id: restricted_star_in_cte, sql: "WITH c AS (SELECT * FROM olist_customers_dataset) SELECT customer_city FROM c", expected: block, layer: 3, check: column_allowlist, why: restricted column via SELECT * inside a CTE}
+- {id: restricted_in_where, sql: "SELECT count(*) FROM olist_customers_dataset WHERE customer_zip_code_prefix = '01001'", expected: block, layer: 3, check: column_allowlist, why: restricted column used as an oracle in WHERE}
+- {id: restricted_in_join_on, sql: "SELECT avg(g.geolocation_lat) FROM olist_customers_dataset c JOIN olist_geolocation_dataset g ON c.customer_zip_code_prefix = g.geolocation_zip_code_prefix", expected: block, layer: 3, check: column_allowlist, why: restricted column in a JOIN condition}
+- {id: restricted_in_aggregate, sql: "SELECT count(DISTINCT customer_zip_code_prefix) FROM olist_customers_dataset", expected: block, layer: 3, check: column_allowlist, why: restricted column inside an aggregate}
+- {id: restricted_order_by, sql: "SELECT customer_city FROM olist_customers_dataset ORDER BY customer_zip_code_prefix", expected: block, layer: 3, check: column_allowlist, why: restricted column in ORDER BY}
+- {id: restricted_quoted_upper, sql: "SELECT \"CUSTOMER_ZIP_CODE_PREFIX\" FROM olist_customers_dataset", expected: block, layer: 3, check: column_allowlist, why: quoted identifier with different case}
+- {id: restricted_review_text, sql: "SELECT review_comment_message FROM olist_order_reviews_dataset WHERE review_comment_message LIKE '%@%'", expected: block, layer: 3, check: column_allowlist, why: free-text column that may hold emails}
+- {id: restricted_correlated, sql: "SELECT o.order_id FROM olist_orders_dataset o WHERE EXISTS (SELECT 1 FROM olist_customers_dataset c WHERE c.customer_id = o.customer_id AND c.customer_zip_code_prefix LIKE '0%')", expected: block, layer: 3, check: column_allowlist, why: restricted column in a correlated subquery}
+- {id: table_alias_column_list, sql: "SELECT z FROM olist_customers_dataset AS c(a, b, z)", expected: block, layer: 3, check: column_allowlist, why: "bypass found (sqlglot probe before the first draft): a table alias column list renames base columns, so the restricted zip prefix passes qualify() as 'z'"}
+- {id: whole_row_struct, sql: "SELECT c FROM olist_customers_dataset AS c", expected: block, layer: 3, check: column_allowlist, why: "bypass found (first draft accepted it): DuckDB returns the whole row as a struct when a table alias is used as a column; qualify() turns it into exp.TableColumn, which the exp.Column checks never saw"}
+- {id: whole_row_struct_table_name, sql: "SELECT olist_customers_dataset FROM olist_customers_dataset", expected: block, layer: 3, check: column_allowlist, why: whole-row struct via the table name}
+- {id: columns_star_expression, sql: "SELECT COLUMNS('.*') FROM olist_customers_dataset", expected: block, layer: 3, check: function_allowlist, why: DuckDB COLUMNS() star expression}
+- {id: unknown_column, sql: "SELECT password FROM olist_customers_dataset", expected: block, layer: 3, check: column_allowlist, why: column not in the policy}
+
+# --- complexity limits -----------------------------------------------------------------
+- {id: comma_join, sql: "SELECT count(*) FROM olist_orders_dataset, olist_order_items_dataset", expected: block, layer: 3, check: complexity, why: implicit cartesian join}
+- {id: cross_join, sql: "SELECT count(*) FROM olist_orders_dataset CROSS JOIN olist_order_items_dataset", expected: block, layer: 3, check: complexity, why: explicit cartesian join}
+- {id: join_on_true, sql: "SELECT count(*) FROM olist_orders_dataset o JOIN olist_order_items_dataset i ON TRUE", expected: block, layer: 3, check: complexity, why: cartesian join disguised with ON TRUE}
+- {id: join_on_one_equals_one, sql: "SELECT count(*) FROM olist_orders_dataset o JOIN olist_order_items_dataset i ON 1 = 1", expected: block, layer: 3, check: complexity, why: cartesian join disguised with ON 1 = 1}
+- {id: join_on_one_side, sql: "SELECT count(*) FROM olist_orders_dataset o JOIN olist_order_items_dataset i ON o.order_status = 'delivered'", expected: block, layer: 3, check: complexity, why: ON condition that only filters one side}
+- {id: natural_join, sql: "SELECT count(*) FROM olist_orders_dataset NATURAL JOIN olist_order_items_dataset", expected: block, layer: 3, check: complexity, why: "bypass found (first draft accepted it): qualify() rewrites NATURAL JOIN into an explicit ON, so a join check on the qualified tree passed it"}
+- {id: positional_join, sql: "SELECT count(*) FROM olist_orders_dataset POSITIONAL JOIN olist_order_items_dataset", expected: block, layer: 3, check: complexity, why: DuckDB positional join}
+- {id: too_many_joins, sql: "SELECT count(*) FROM olist_orders_dataset o JOIN olist_order_items_dataset i ON o.order_id = i.order_id JOIN olist_order_payments_dataset p ON o.order_id = p.order_id JOIN olist_order_reviews_dataset r ON o.order_id = r.order_id JOIN olist_customers_dataset c ON o.customer_id = c.customer_id JOIN olist_sellers_dataset s ON i.seller_id = s.seller_id", expected: block, layer: 3, check: complexity, why: 5 joins (max 4)}
+- {id: too_deep, sql: "SELECT a FROM (SELECT a FROM (SELECT a FROM (SELECT a FROM (SELECT 1 AS a) AS t1) AS t2) AS t3) AS t4", expected: block, layer: 3, check: complexity, why: subquery depth 4 (max 3)}
+- {id: recursive_cte, sql: "WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r) SELECT n FROM r", expected: block, layer: 3, check: complexity, why: "unbounded recursion: the outer LIMIT does not stop it"}
+
+# --- parse failures ----------------------------------------------------------------------
+- {id: empty, sql: "", expected: block, layer: 3, check: parse, why: empty input}
+- {id: only_semicolon, sql: ";", expected: block, layer: 3, check: parse, why: no statement at all}
+- {id: garbage,sql: "SELECT FROM WHERE (", expected: block, layer: 3, check: parse, why: not SQL}
+- {id: unterminated_string, sql: "SELECT 'abc", expected: block, layer: 3, check: parse, why: unterminated string literal}
+
+# --- benign queries: must be ALLOWED (catch over-blocking) -------------------------------
+- {id: ok_count_orders, sql: "SELECT count(*) AS n FROM olist_orders_dataset", expected: allow, layer: 3, why: simple count}
+- {id: ok_star_orders, sql: "SELECT * FROM olist_orders_dataset", expected: allow, layer: 3, why: SELECT * on a table with no restricted column}
+- {id: ok_trailing_semicolon, sql: "SELECT count(*) FROM olist_orders_dataset;", expected: allow, layer: 3, why: a single trailing semicolon is tolerated}
+- {id: ok_lowercase, sql: "select order_status, count(*) as n from olist_orders_dataset group by order_status order by n desc", expected: allow, layer: 3, why: lowercase keywords and ORDER BY an output alias}
+- {id: ok_top_customers_revenue, sql: "SELECT c.customer_unique_id, round(sum(i.price), 2) AS revenue FROM olist_order_items_dataset i JOIN olist_orders_dataset o ON i.order_id = o.order_id JOIN olist_customers_dataset c ON o.customer_id = c.customer_id GROUP BY c.customer_unique_id ORDER BY revenue DESC LIMIT 5", expected: allow, layer: 3, why: top customers by revenue}
+- {id: ok_categories_english, sql: "SELECT t.product_category_name_english AS category, round(sum(i.price), 2) AS revenue FROM olist_order_items_dataset i JOIN olist_products_dataset p ON i.product_id = p.product_id JOIN product_category_name_translation t ON p.product_category_name = t.product_category_name GROUP BY category ORDER BY revenue DESC LIMIT 10", expected: allow, layer: 3, why: two joins and GROUP BY an alias}
+- {id: ok_monthly_series, sql: "SELECT strftime(date_trunc('month', order_purchase_timestamp), '%Y-%m') AS month, count(*) AS orders FROM olist_orders_dataset GROUP BY 1 ORDER BY 1", expected: allow, layer: 3, why: date functions}
+- {id: ok_delivery_days, sql: "SELECT round(avg(date_diff('day', order_purchase_timestamp, order_delivered_customer_date)), 2) AS avg_days FROM olist_orders_dataset WHERE order_delivered_customer_date IS NOT NULL", expected: allow, layer: 3, why: date_diff and IS NOT NULL}
+- {id: ok_cte, sql: "WITH per_order AS (SELECT order_id, sum(price) AS total FROM olist_order_items_dataset GROUP BY order_id) SELECT round(avg(total), 2) AS avg_order_value FROM per_order", expected: allow, layer: 3, why: CTE}
+- {id: ok_subquery_in, sql: "SELECT count(*) FROM olist_orders_dataset WHERE order_id IN (SELECT order_id FROM olist_order_reviews_dataset WHERE review_score = 1)", expected: allow, layer: 3, why: IN subquery}
+- {id: ok_union, sql: "SELECT customer_state AS state FROM olist_customers_dataset UNION SELECT seller_state FROM olist_sellers_dataset", expected: allow, layer: 3, why: UNION of SELECTs}
+- {id: ok_case_coalesce, sql: "SELECT CASE WHEN review_score >= 4 THEN 'good' ELSE 'bad' END AS bucket, count(*) AS n FROM olist_order_reviews_dataset GROUP BY bucket", expected: allow, layer: 3, why: CASE expression}
+- {id: ok_window, sql: "SELECT seller_id, revenue, rank() OVER (ORDER BY revenue DESC) AS rnk FROM (SELECT seller_id, sum(price) AS revenue FROM olist_order_items_dataset GROUP BY seller_id) AS s ORDER BY rnk LIMIT 10", expected: allow, layer: 3, why: window function over a derived table}
+- {id: ok_string_literal_with_keywords, sql: "SELECT count(*) FROM olist_orders_dataset WHERE order_status = 'drop table; -- x /* y */'", expected: allow, layer: 3, why: "SQL keywords, ';', '--' and '/*' inside a string literal are data"}
+- {id: ok_portuguese_literal, sql: "SELECT count(*) AS n FROM olist_customers_dataset WHERE customer_city = 'são paulo'", expected: allow, layer: 3, why: non-ASCII string literal}
+- {id: ok_exclude_restricted, sql: "SELECT * EXCLUDE (customer_zip_code_prefix) FROM olist_customers_dataset", expected: allow, layer: 3, why: "star that explicitly excludes the restricted column"}
+- {id: ok_giant_limit, sql: "SELECT order_id FROM olist_orders_dataset LIMIT 100000000", expected: allow, layer: 3, why: giant LIMIT is capped to MAX_ROWS}
+- {id: ok_join_using, sql: "SELECT count(*) FROM olist_orders_dataset JOIN olist_order_payments_dataset USING (order_id)", expected: allow, layer: 3, why: JOIN ... USING is a join condition}
+- {id: ok_left_join, sql: "SELECT o.order_status, count(r.review_id) AS reviews FROM olist_orders_dataset o LEFT JOIN olist_order_reviews_dataset r ON o.order_id = r.order_id GROUP BY o.order_status", expected: allow, layer: 3, why: LEFT JOIN}
+- {id: ok_four_joins, sql: "SELECT count(*) FROM olist_orders_dataset o JOIN olist_order_items_dataset i ON o.order_id = i.order_id JOIN olist_order_payments_dataset p ON o.order_id = p.order_id JOIN olist_customers_dataset c ON o.customer_id = c.customer_id JOIN olist_sellers_dataset s ON i.seller_id = s.seller_id", expected: allow, layer: 3, why: exactly the 4-join maximum}
+- {id: ok_depth_three, sql: "SELECT a FROM (SELECT a FROM (SELECT a FROM (SELECT 1 AS a) AS t1) AS t2) AS t3", expected: allow, layer: 3, why: exactly the depth-3 maximum}
+- {id: ok_exists_correlated, sql: "SELECT count(*) FROM olist_orders_dataset o WHERE EXISTS (SELECT 1 FROM olist_order_reviews_dataset r WHERE r.order_id = o.order_id AND r.review_score = 5)", expected: allow, layer: 3, why: correlated EXISTS}
+- {id: ok_parenthesized, sql: "(SELECT count(*) FROM olist_sellers_dataset)", expected: allow, layer: 3, why: parenthesized root query}
+- {id: ok_extract_date_part, sql: "SELECT extract(year FROM order_purchase_timestamp) AS y, date_part('month', order_purchase_timestamp) AS m, count(*) AS n FROM olist_orders_dataset GROUP BY y, m ORDER BY y, m", expected: allow, layer: 3, why: extract and date_part}
+- {id: ok_string_functions, sql: "SELECT upper(trim(customer_city)) AS city, length(customer_city) AS len FROM olist_customers_dataset LIMIT 5", expected: allow, layer: 3, why: string functions}

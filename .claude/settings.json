@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m text2sql:*)",
+      "Bash(.venv/Scripts/python.exe -m text2sql:*)",
+      "Bash(.venv\\Scripts\\python.exe -m text2sql:*)",
+      "PowerShell(python -m text2sql:*)",
+      "PowerShell(.\\.venv\\Scripts\\python.exe -m text2sql:*)",
+      "Bash(pytest:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(.venv/Scripts/python.exe -m pytest:*)",
+      "PowerShell(.\\.venv\\Scripts\\python.exe -m pytest:*)",
+      "Bash(.venv/Scripts/python.exe -m text2sql review:*)",
+      "Bash(python -m text2sql review:*)"
+    ],
+    "deny": [
+      "Bash(duckdb:*)",
+      "Bash(sqlite3:*)",
+      "Bash(psql:*)",
+      "PowerShell(duckdb:*)",
+      "PowerShell(sqlite3:*)",
+      "PowerShell(psql:*)",
+      "Read(./data/*.duckdb)",
+      "Read(./data/*.duckdb.wal)",
+      "Read(./data/raw/**)",
+      "Edit(./data/*.duckdb)",
+      "Edit(./data/*.duckdb.wal)",
+      "Edit(./questions/logs/**)"
+    ]
+  }
+}

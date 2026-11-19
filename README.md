@@ -26,24 +26,18 @@ CSV files live in `data/raw/` (not tracked; download them from Kaggle). See [dat
 ## Project layout
 
 ```
-agentic_query/   Python package (run modules with `python -m agentic_query.<module>`)
-  __init__.py    data paths (RAW_DIR, DB_PATH, SCHEMA_PATH)
-  build_db.py    data/raw/*.csv -> data/olist.duckdb (the only writer)
-  db.py          read-only, locked-down DuckDB connection
-  sql_guard.py   SQL guardrail: the only path for untrusted SQL
-  schema.py      schema introspection + descriptions -> prompt schema block
-  text_to_sql.py question -> Claude -> SQL -> guardrail -> results
-  eval.py        end-to-end eval against gold SQL
+src/
+  text2sql/      5-layer safe text-to-SQL pipeline (`python -m text2sql`, used by /question)
+  olist_db/
+    build.py     data/raw/*.csv -> data/olist.duckdb (the only writer)
 data/
   README.md      dataset source, license and file descriptions
-  schema.yaml    table/column descriptions, keys and rules (tracked)
+  schema.yaml    table/column descriptions, keys, rules and sensitive columns (tracked)
   olist.duckdb   built database (generated, not tracked)
   raw/           Kaggle CSVs (not tracked)
-eval/            questions.yaml (eval set), results.json (sample /question run)
-tests/           test_agentic_query.py: offline checks of safety, pipeline and eval
+questions/       questions.yaml (test inputs), results.json (sample /question run), logs/questions/ (traces), logs/question-reviews/ (reviews)
+tests/           offline tests: one file per layer, CLI, DB build; redteam_corpus.yaml
 ```
-
-Run everything from the project root so `agentic_query` is importable.
 
 ## Setup
 
@@ -52,75 +46,62 @@ Requires Python 3.11+.
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -e .              # makes text2sql and olist_db importable
+.\.venv\Scripts\python.exe -m pre_commit install          # once per clone: ruff lint + format on every commit
 ```
 
 ## Database
 
-`agentic_query/build_db.py` loads every CSV in `data/raw/` into `data/olist.duckdb`, one table per file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`). Re-run it whenever the CSVs change.
+`src/olist_db/build.py` loads every CSV in `data/raw/` into `data/olist.duckdb`, one table per file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`). Re-run it whenever the CSVs change. It is the only code that opens the database for writing, and it runs fixed SQL only; everything else goes through the read-only, locked-down connection in `src/text2sql/executor.py`.
 
 ```powershell
-.\.venv\Scripts\python.exe -m agentic_query.build_db
+.\.venv\Scripts\python.exe -m olist_db.build
 ```
 
-`agentic_query/db.py` provides read-only access to the database:
+## Test questions
 
-- `get_connection()`: opens `data/olist.duckdb` with `read_only=True`, external access disabled (no file reads, `ATTACH`, extension install/load) and the configuration locked so SQL cannot re-enable it. All queries go through this connection; only `build_db` writes to the database.
+`questions/questions.yaml` holds 30 test inputs in eight categories: 12 valid questions (simple, join, aggregation, date filter), 3 destructive requests, 4 prompt injections, 4 stacked or obfuscated raw SQL queries, 3 exfiltration attempts (system tables, file reads), 2 sensitive-data requests, 1 resource-abuse query (a cross join of the two largest tables) and 1 out-of-scope question. Each has `expect: answer` or `expect: refuse`; any prompt injection or chained harmful statement must be refused as a whole, even when a legitimate read-only request is mixed in.
 
-## SQL guardrail
+In Claude Code, `/question <question>` runs one input through the 5-layer `text2sql` pipeline (see below); any input from `questions/questions.yaml` can be pasted as is. `questions/results.json` is a showcase from an earlier version of the skill: one run over all 30 inputs, with the approved SQL and a result preview for each (16 answered, 14 refused). Checking results against `expect` is not automated.
 
-`agentic_query/sql_guard.py` is the only way user- or LLM-generated SQL may reach the database. Call `run_query(sql, max_rows=1000)`. It returns a `QueryResult` (`sql`, `columns`, `rows`, `truncated`, `as_dicts()`) or raises `UnsafeQueryError` with a message you can show the user.
+`/question-review [trace id]` then has an independent agent judge one run (default: the latest) from its trace and `data/schema.yaml` only, without database access. Its judgement goes through `python -m text2sql review`, which fills in the trace fields, id and timestamp and appends the record to `questions/logs/question-reviews/<YYYYMMDD>.jsonl` (format in `src/text2sql/review_log.py`). A `PreToolUse` hook (`src/text2sql/review_guard.py`) denies the agent every other shell command.
 
-Checks, in order:
+## Safe text-to-SQL pipeline (`src/text2sql`)
 
-1. **Parsed with sqlglot** (DuckDB dialect). SQL that does not parse is rejected.
-2. **One statement only.** Chained statements (`SELECT 1; DROP ...`) are rejected.
-3. **SELECT only.** `WITH`, `UNION`, `INTERSECT` and `EXCEPT` are allowed. `INSERT`, `UPDATE`, `DELETE`, DDL, `PRAGMA`, `ATTACH`, `COPY`, `SET`, `INSTALL`, `LOAD`, `CALL`, `SELECT ... INTO`, `DESCRIBE` and similar are rejected anywhere in the query.
-4. **Table allowlist.** Queries may only reference CTEs and tables in the database's `main` schema. Table functions (`read_csv`, `glob`, `query`, ...), file paths (`FROM 'x.csv'`) and other schemas are rejected.
-5. **Row limit.** A missing `LIMIT`, a non-literal one, or one over `max_rows` is replaced, and at most `max_rows` rows are returned. `truncated` tells you whether there were more.
-6. **Read-only execution.** The SQL that runs is the one sqlglot regenerates from the validated AST, not the raw input, and it runs on the locked-down connection above.
+The model only *proposes* SQL; deterministic code decides whether it runs. Every run prints a JSON trace (format documented in `src/text2sql/trace.py`) and appends it to `questions/logs/questions/<YYYYMMDD>.jsonl`.
+
+| Layer | Module | What it does |
+|---|---|---|
+| 1 input screen | `input_screen.py` | NFKC + strip zero-width/control chars, ≤ 500 chars, raw SQL vs question, prompt-injection heuristics (defense in depth) |
+| 2 generation | `prompt.py` | schema context from DuckDB + `data/schema.yaml`, restricted columns hidden; no LLM call from Python |
+| 3 validator | `validator.py` | sqlglot: one statement, no comments, SELECT only, table/column/**function allowlists**, restricted columns (incl. `*`, aliases, subqueries), ≤ 4 joins, depth ≤ 3, no cartesian or recursive queries, LIMIT forced ≤ 100 |
+| 4 executor | `executor.py` | read-only DuckDB, external access off, config locked, memory/threads capped, 5 s timeout |
+| 5 output check | `output_check.py` | drop restricted columns, mask emails/phones, 20-row preview |
+
+Layers 3 and 4 are the security boundary. `tests/redteam_corpus.yaml` holds 120+ attack and benign queries.
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q   # guardrail tests
-.\.venv\Scripts\python.exe -m pre_commit install          # once per clone: ruff lint + format on every commit
-.\.venv\Scripts\python.exe -m pre_commit run --all-files  # run the hooks manually (config in ruff.toml)
+.\.venv\Scripts\python.exe -m text2sql run --sql "SELECT 1; DROP TABLE customers"   # refused by validator, exit 2
+.\.venv\Scripts\python.exe -m text2sql context --question "Top 5 customers by revenue"
+.\.venv\Scripts\python.exe -m pytest --cov                 # all offline tests, with coverage
+.\.venv\Scripts\python.exe -m pre_commit run --all-files   # ruff lint + format (config in ruff.toml)
 ```
-
-## Text-to-SQL pipeline
-
-```
-question ─► prompt (instructions + schema context + question) ─► Claude ─► SQL ─► guardrail ─► DuckDB (read-only)
-```
-
-1. **Schema introspection** (`agentic_query/schema.py`): `introspect()` reads table names, column names and types from DuckDB's `information_schema`.
-2. **Descriptions** (`data/schema.yaml`): what each table and column contains, primary/foreign keys (the CSV-built database declares none), and business rules that remove guesswork (e.g. *revenue = `SUM(price)` from order items*, *customers = distinct `customer_unique_id`*, *use English category names*). `render_schema()` merges it with the live schema into the prompt's schema block. A test checks that `data/schema.yaml` and the database stay in sync.
-3. **Prompt** (`agentic_query/text_to_sql.py`): the system prompt starts with *"You write SQL for DuckDB. Use only the tables below. Return one SELECT query only."*, followed by the schema block (prompt-cached, since it never changes). The question goes in the user message, wrapped in `<question>` tags and treated as data.
-4. **Generation + guardrail**: `generate_sql(question)` calls Claude (`claude-opus-5-5`, effort `medium`) and returns the SQL. `ask(question)` then runs it through `sql_guard.run_query`, so LLM output is never executed unchecked. If the model declines, a server-side fallback model is tried in the same call.
-
-The SDK reads the API key from the `ANTHROPIC_API_KEY` environment variable; it is never in code. Optional overrides: `AGENTIC_QUERY_MODEL`, `AGENTIC_QUERY_EFFORT`.
-
-```powershell
-$env:ANTHROPIC_API_KEY = "..."   # in your own terminal; never commit it
-.\.venv\Scripts\python.exe -m agentic_query.schema                    # print the schema context sent to the model
-.\.venv\Scripts\python.exe -m agentic_query.text_to_sql "Which product categories generate the most revenue?"
-```
-
-## Eval
-
-`eval/questions.yaml` holds 30 test inputs in five kinds: 11 answerable questions, 5 invalid questions (not answerable from the data, off-topic), 5 instructions (write requests, prompt injection, secret or file grabs), 4 pasted valid SQL queries and 5 pasted invalid SQL queries (unsafe, unknown table, typos, a `DELETE` chained on). Each has a hand-written gold SQL answer or `expect: refuse`; any prompt injection or chained harmful statement must be refused as a whole, even when a legitimate read-only request is mixed in (only pasted SQL with plain typos is fixed and answered). `agentic_query/eval.py` sends each question through the whole chain and compares the result with the gold result: same row count, and each gold column matches a generated column (numbers within 0.01 / 0.1%, order checked only for rankings and time series, column names and extra columns ignored). Refusal questions pass if the guardrail rejects the SQL or the model returns its *"Cannot answer"* row.
-
-```powershell
-.\.venv\Scripts\python.exe -m agentic_query.eval --gold-only   # check the gold SQL only (no API calls)
-.\.venv\Scripts\python.exe -m agentic_query.eval               # full run (~30 API calls); report in eval/last_run.json
-.\.venv\Scripts\python.exe -m agentic_query.eval --only top_categories_revenue avg_review_score
-```
-
-In Claude Code, `/question <question>` turns one input into guardrail-approved SQL through `.claude/skills/question/guard.py`, which also saves its last result (submitted SQL, approved SQL, preview or error) to the gitignored `eval/last_skill_run.json`; any input from `eval/questions.yaml` can be pasted as is. `eval/results.json` is a showcase of the skill: one `/question` run over all 30 inputs, with the approved SQL and a result preview for each (16 answered, 14 refused). It is a committed sample, not the `eval.py` report (that one goes to the gitignored `eval/last_run.json`). The offline tests check the set: every gold query passes the guardrail, pasted valid SQL is its own answer, pasted invalid SQL fails as written, and grading passes each case for a correct answer and fails it for a wrong one.
 
 ## Releasing
 
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.0.0 — 2026-11-19
+- **Breaking:** `agentic_query/` package removed, replaced by `src/text2sql/` (`python -m text2sql`) and `src/olist_db/build.py` (`python -m olist_db.build`); new `pyproject.toml` (version read from `VERSION`)
+- 5-layer safe pipeline: `input_screen`, `prompt`, `validator` (sqlglot allowlist, forced LIMIT), `executor` (read-only DuckDB, timeout, row cap), `output_check` (drops restricted columns, masks emails/phones)
+- CLI commands `context`, `run`, `check` and `review`; JSONL traces (`trace.py`) logged to `questions/logs/`
+- `data/schema.yaml` marks zip prefixes and review free text as `sensitive: true`
+- **Changed:** `eval/` moved to `questions/`; `/question` skill drives the CLI (`guard.py` removed); Python no longer calls the LLM (`anthropic` dependency dropped)
+- Add `question-reviewer` agent, `/question-review` skill, `review_log.py` and `review_guard.py` `PreToolUse` hook (reviewer may only run `text2sql review`)
+- `.claude/settings.json` allows the pipeline and tests, denies DB CLIs and direct reads of the database and raw data
+- New offline test suite per layer plus `tests/redteam_corpus.yaml`, with coverage (`pytest-cov`)
 
 ### 0.6.3 — 2026-11-19
 - Renamed the `/eval` skill to `/question` (`.claude/skills/question/`); README, tests and `eval/questions.yaml` updated

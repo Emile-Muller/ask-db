@@ -1,9 +1,15 @@
 # Human-written descriptions of the Olist database, merged with the live schema
-# (table/column names and types introspected from DuckDB) by agentic_query/schema.py.
+# (table/column names and types introspected from DuckDB) by src/text2sql/prompt.py.
 #
 # The database is built from CSVs, so DuckDB has no declared keys: primary and
-# foreign keys are declared here. tests/test_agentic_query.py checks that every table and
+# foreign keys are declared here. tests/test_prompt.py checks that every table and
 # column below exists in the database and that every database column is described.
+#
+# A column is either `name: description` or `name: {description: ..., sensitive: true}`.
+# Sensitive (restricted) columns are hidden from the model's schema context, rejected by
+# the SQL validator wherever they appear (incl. SELECT *, aliases, subqueries, JOIN ON) and
+# dropped from results by the output check. Restricted here: location quasi-identifiers
+# (zip prefixes) and free-text review fields that may contain personal data.
 
 dataset: >
   Olist Brazilian e-commerce marketplace, ~100k orders placed between 2016-09 and
@@ -73,8 +79,12 @@ tables:
       review_id: Review identifier (a few reviews cover several orders).
       order_id: Order reviewed.
       review_score: Rating from 1 (worst) to 5 (best).
-      review_comment_title: Optional review title in Portuguese (mostly null).
-      review_comment_message: Optional review text in Portuguese (often null).
+      review_comment_title:
+        description: Optional review title in Portuguese (mostly null). Free text, may contain personal data.
+        sensitive: true
+      review_comment_message:
+        description: Optional review text in Portuguese (often null). Free text, may contain personal data.
+        sensitive: true
       review_creation_date: When the satisfaction survey was sent.
       review_answer_timestamp: When the customer answered the survey.
 
@@ -86,7 +96,9 @@ tables:
     columns:
       customer_id: Key used by olist_orders_dataset (one per order).
       customer_unique_id: The actual person. The same person has several customer_id values if they ordered several times.
-      customer_zip_code_prefix: First 5 digits of the zip code (text, keeps leading zeros).
+      customer_zip_code_prefix:
+        description: First 5 digits of the zip code (text, keeps leading zeros). Location quasi-identifier.
+        sensitive: true
       customer_city: City, lowercase (e.g. sao paulo, rio de janeiro).
       customer_state: Two-letter Brazilian state code (e.g. SP, RJ, MG).
 
@@ -97,7 +109,9 @@ tables:
       seller_zip_code_prefix: olist_geolocation_dataset.geolocation_zip_code_prefix
     columns:
       seller_id: Seller identifier.
-      seller_zip_code_prefix: First 5 digits of the seller's zip code (text).
+      seller_zip_code_prefix:
+        description: First 5 digits of the seller's zip code (text). Location quasi-identifier.
+        sensitive: true
       seller_city: Seller city, lowercase.
       seller_state: Two-letter Brazilian state code of the seller.
 
