@@ -7,12 +7,16 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
+import yaml
 
-from text2sql import cli, review_guard, review_log
+from text2sql import cli, config, review_guard, review_log
 
 ACCEPTED_ID = "a" * 32
 REFUSED_ID = "b" * 32
@@ -230,4 +234,46 @@ def test_guard_hook_output(command, decision):
 
 def test_guard_hook_fails_closed():
     p = _hook("not json")
+    assert p.returncode == 2 and "blocked" in p.stderr
+
+
+def _agent_hook_command() -> str:
+    text = (config.PROJECT_ROOT / ".claude" / "agents" / "question-reviewer.md").read_text(
+        encoding="utf-8"
+    )
+    front = yaml.safe_load(text.split("---")[1])
+    return front["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+
+
+def _find_bash() -> str | None:
+    """A POSIX bash like the one Claude Code runs hooks with.
+
+    On Windows, `shutil.which("bash")` can return the WSL launcher in System32, which fails
+    when no Linux distribution is installed: use Git Bash (next to `git`) instead.
+    """
+    if os.name != "nt":
+        return shutil.which("bash")
+    candidates = []
+    if git := shutil.which("git"):
+        git_root = Path(git).resolve().parent.parent  # <Git>/cmd/git.exe or <Git>/bin/git.exe
+        candidates.append(git_root / "bin" / "bash.exe")
+    program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+    candidates.append(Path(program_files) / "Git" / "bin" / "bash.exe")
+    found = shutil.which("bash")
+    if found and "system32" not in found.lower():
+        candidates.insert(0, Path(found))
+    return next((str(c) for c in candidates if c.is_file()), None)
+
+
+BASH = _find_bash()
+
+
+@pytest.mark.skipif(BASH is None, reason="bash not available")
+def test_agent_hook_blocks_when_the_guard_cannot_start(tmp_path):
+    """Exit 1 / 127 would not block the call: the hook command must turn them into 2."""
+    p = subprocess.run(  # noqa: S603 - the hook command from the repo, fixed input
+        [BASH, "-c", _agent_hook_command()],
+        input="{}", capture_output=True, text=True, timeout=30, check=False,
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(tmp_path)},  # no .venv there
+    )  # fmt: skip
     assert p.returncode == 2 and "blocked" in p.stderr

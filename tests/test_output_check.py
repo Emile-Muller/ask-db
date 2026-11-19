@@ -7,7 +7,14 @@ from decimal import Decimal
 
 import pytest
 
-from text2sql.output_check import EMAIL_MASK, PHONE_MASK, RESTRICTED_MASK, check, to_jsonable
+from text2sql.output_check import (
+    CUT_MARK,
+    EMAIL_MASK,
+    PHONE_MASK,
+    RESTRICTED_MASK,
+    check,
+    to_jsonable,
+)
 
 RESTRICTED = {"customer_zip_code_prefix", "review_comment_message"}
 
@@ -32,6 +39,30 @@ def test_all_columns_restricted_is_refused():
 def test_default_restricted_names_come_from_policy():
     out = check(["customer_zip_code_prefix", "n"], [("01001", 1)])
     assert out.columns == ["n"]
+
+
+def test_explicit_empty_restricted_set_is_respected():
+    out = check(["customer_zip_code_prefix"], [("01001",)], restricted_names=set())
+    assert out.ok and out.columns == ["customer_zip_code_prefix"]
+
+
+def test_long_strings_are_cut():
+    # string_agg over a whole table returns one huge cell: the row cap does not bound it.
+    huge = ";".join(f"order{i}|customer{i}" for i in range(50_000))
+    nested = {"k": huge, "l": [huge]}
+    out = check(["s", "n"], [(huge, nested)], restricted_names=RESTRICTED, max_cell_chars=50)
+    cell, inner = out.rows[0]
+    assert cell == huge[:50] + CUT_MARK
+    assert inner == {"k": huge[:50] + CUT_MARK, "l": [huge[:50] + CUT_MARK]}
+    assert out.cut_cells == 3 and out.details()["cut_cells"] == 3
+    assert check(["s"], [("short",)], restricted_names=RESTRICTED).cut_cells == 0
+
+
+def test_masking_runs_before_the_cut():
+    cell = "word " * 9 + "maria@example.com"  # the email straddles the cut
+    out = check(["s"], [(cell,)], restricted_names=RESTRICTED, max_cell_chars=50)
+    assert out.rows[0][0] == ("word " * 9 + EMAIL_MASK)[:50] + CUT_MARK
+    assert "maria" not in out.rows[0][0]
 
 
 @pytest.mark.parametrize(
@@ -119,7 +150,7 @@ def test_result_and_details_shape():
     out = check(["a"], [(1,)], restricted_names=RESTRICTED)
     assert out.result() == {"columns": ["a"], "rows": [[1]], "row_count": 1, "truncated": False}
     assert set(out.details()) == {
-        "dropped_columns", "masked_cells", "preview_rows", "row_count", "truncated"
+        "dropped_columns", "masked_cells", "cut_cells", "preview_rows", "row_count", "truncated"
     }  # fmt: skip
 
 

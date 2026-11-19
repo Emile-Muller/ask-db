@@ -7,7 +7,9 @@ hooks:
     - matcher: "Bash|PowerShell"
       hooks:
         - type: command
-          command: '"$CLAUDE_PROJECT_DIR/.venv/Scripts/python.exe" -m text2sql.review_guard'
+          # Fail closed: only exit 2 blocks a call, so a guard that cannot even start
+          # (missing venv, import error: exit 1 / 127) must still block.
+          command: '"$CLAUDE_PROJECT_DIR/.venv/Scripts/python.exe" -m text2sql.review_guard || { echo "review_guard: blocked, the guard did not run cleanly" >&2; exit 2; }'
 ---
 
 You are an independent reviewer of one text-to-SQL run on the Olist database. You did not

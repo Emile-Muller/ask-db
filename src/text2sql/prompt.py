@@ -184,7 +184,8 @@ def build_context(
     docs = config.load_schema_docs(Path(schema_path))
     live = introspect(db_path)
     schema_text, hidden = render_schema(live, docs)
-    tables = [t for t in sorted(live) if t.lower() in config.policy_from_docs(docs).tables]
+    allowed = config.policy_from_docs(docs).tables
+    tables = [t for t in sorted(live) if t.lower() in allowed]
     return Context(render_prompt(question, schema_text, docs), tables, hidden)
 
 

@@ -93,6 +93,16 @@ In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.
 
 ## Version history
 
+### 1.1.0 — 2026-11-19
+- Validator runs the qualified AST it checked (columns qualified, stars expanded from the policy); `_col_<n>` aliases get readable names
+- Validator fixes: CTE names resolved per scope, alias shadowing in `WHERE` blocked, joins need a cross-table equality, SQL capped at `MAX_SQL_CHARS` (5000)
+- Validator fails closed if a sqlglot upgrade renames a denylisted node; sqlglot pinned to `>=30.33,<31`
+- Output check cuts strings longer than `MAX_CELL_CHARS` (1000) after masking; new `cut_cells` trace field
+- `--trace-file` / `--review-file` confined to `.jsonl` files under `questions/logs/` or the temp dir
+- `question-reviewer` hook fails closed when the guard cannot start; `context` no longer prints a shell command built from raw SQL
+- `.claude/settings.json` denies edits to `tests/redteam_corpus.yaml` and `data/schema.yaml`; `CLAUDE.md` documents the rule
+- New red-team cases and tests; the agent-hook test uses Git Bash on Windows instead of the WSL launcher in System32
+
 ### 1.0.0 — 2026-11-19
 - **Breaking:** `agentic_query/` package removed, replaced by `src/text2sql/` (`python -m text2sql`) and `src/olist_db/build.py` (`python -m olist_db.build`); new `pyproject.toml` (version read from `VERSION`)
 - 5-layer safe pipeline: `input_screen`, `prompt`, `validator` (sqlglot allowlist, forced LIMIT), `executor` (read-only DuckDB, timeout, row cap), `output_check` (drops restricted columns, masks emails/phones)

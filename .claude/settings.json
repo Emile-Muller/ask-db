@@ -25,7 +25,9 @@
       "Read(./data/raw/**)",
       "Edit(./data/*.duckdb)",
       "Edit(./data/*.duckdb.wal)",
-      "Edit(./questions/logs/**)"
+      "Edit(./questions/logs/**)",
+      "Edit(./tests/redteam_corpus.yaml)",
+      "Edit(./data/schema.yaml)"
     ]
   }
 }

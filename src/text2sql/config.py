@@ -26,6 +26,7 @@ DIALECT = "duckdb"
 # Layer 1
 MAX_INPUT_CHARS = 500
 # Layer 3
+MAX_SQL_CHARS = 5_000  # the SQL itself (proposed SQL does not go through layer 1's limit)
 MAX_ROWS = 100
 MAX_JOINS = 4
 MAX_SUBQUERY_DEPTH = 3
@@ -35,10 +36,12 @@ MEMORY_LIMIT = "512MB"
 THREADS = 2
 # Layer 5
 PREVIEW_ROWS = 20
+MAX_CELL_CHARS = 1_000  # longer strings are cut (string_agg can pack a table in one cell)
 # Review log (/question-review)
 REVIEW_MAX_INPUT_CHARS = 64_000
 REVIEW_MAX_TEXT_CHARS = 2_000
 REVIEW_MAX_SQL_CHARS = 5_000
+REVIEW_MAX_MODEL_CHARS = 100
 REVIEW_MAX_FINDINGS = 20
 
 

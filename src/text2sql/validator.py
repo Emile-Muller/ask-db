@@ -17,8 +17,10 @@ Checks run in order and stop at the first failure:
 9. complexity          - join count, subquery depth, no cartesian / recursive queries
 10. limit              - LIMIT added if missing, capped at MAX_ROWS
 
-The SQL that runs is ``normalized_sql``: regenerated from the validated AST, never the
-raw input.
+The SQL that runs is ``normalized_sql``: regenerated from the *qualified* AST the column
+checks ran on (every column carries its table, every ``*`` is expanded from the policy),
+never the raw input. DuckDB therefore cannot resolve a name or a star differently from
+what was checked.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from typing import Any
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import Scope, traverse_scope
 from sqlglot.tokens import Token, TokenType
@@ -51,9 +54,9 @@ _FORBIDDEN_NAMES = (
     # SELECT ... INTO, prepared-statement parameters
     "Into", "Placeholder", "Parameter", "SessionParameter",
 )  # fmt: skip
-FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = tuple(
-    getattr(exp, n) for n in _FORBIDDEN_NAMES if hasattr(exp, n)
-)
+# No hasattr() filter: a name that a sqlglot upgrade renamed must fail loudly at import
+# (fail closed), not silently drop out of the denylist.
+FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = tuple(getattr(exp, n) for n in _FORBIDDEN_NAMES)
 
 # Function ALLOWLIST, by sqlglot expression class. Everything else is rejected, which
 # blocks read_csv / read_parquet / glob / getenv / duckdb_tables() / query() etc. by default.
@@ -120,8 +123,10 @@ class _State:
     policy: Policy
     tokens: list[Token] = field(default_factory=list)
     statements: list[exp.Expression] = field(default_factory=list)
-    tree: exp.Expression | None = None  # validated root (mutated by the limit check)
-    qualified: exp.Expression | None = None  # qualified copy, used for column checks
+    tree: exp.Expression | None = None  # validated root, as parsed
+    # Qualified copy: the column checks run on it, the limit is applied to it, and it is
+    # the SQL that runs.
+    qualified: exp.Expression | None = None
 
 
 # --- checks -----------------------------------------------------------------------------
@@ -130,6 +135,8 @@ class _State:
 def _check_parse(s: _State) -> str:
     if not isinstance(s.sql, str) or not s.sql.strip():
         raise _Reject("query is empty")
+    if len(s.sql) > config.MAX_SQL_CHARS:
+        raise _Reject(f"SQL longer than {config.MAX_SQL_CHARS} characters")
     try:
         s.tokens = sqlglot.Dialect.get_or_raise(config.DIALECT).tokenize(s.sql)
         s.statements = [st for st in sqlglot.parse(s.sql, read=config.DIALECT) if st is not None]
@@ -181,17 +188,31 @@ def _check_function_allowlist(s: _State) -> str:
 
 
 def _check_table_allowlist(s: _State) -> str:
-    cte_names = {cte.alias_or_name.lower() for cte in s.tree.find_all(exp.CTE)}
-    used: set[str] = set()
-    for table in s.tree.find_all(exp.Table):
+    tree = normalize_identifiers(s.tree.copy(), dialect=config.DIALECT)
+    tables = list(tree.find_all(exp.Table))
+    for table in tables:
         if not isinstance(table.this, exp.Identifier):
             raise _Reject("table functions are not allowed in FROM / JOIN")
         if table.args.get("db") or table.args.get("catalog"):
             raise _Reject(f"schema-qualified tables are not allowed: {table.sql(config.DIALECT)}")
-        name = table.name.lower()
-        if name not in cte_names and name not in s.policy.tables:
-            raise _Reject(f"table {table.name!r} is not allowed")
-        used.add(name)
+    # Resolve every table per scope: a CTE name only counts where that CTE is visible, so a
+    # CTE defined inside a subquery cannot whitelist the same name elsewhere.
+    used: set[str] = set()
+    seen: set[int] = set()
+    for scope in traverse_scope(tree):
+        for table in scope.tables:
+            seen.add(id(table))
+            source = scope.sources.get(table.alias_or_name)
+            if source is table:
+                if table.name.lower() not in s.policy.tables:
+                    raise _Reject(f"table {table.name!r} is not allowed")
+                used.add(table.name.lower())
+            elif not (
+                isinstance(source, Scope) and source.is_cte and table.name in scope.cte_sources
+            ):
+                raise _Reject(f"table {table.name!r} does not resolve to a policy table or CTE")
+    if any(id(t) not in seen for t in tables):
+        raise _Reject("a table reference could not be resolved to a scope")
     return ", ".join(sorted(used)) or "none"
 
 
@@ -239,12 +260,13 @@ def _check_complexity(s: _State) -> str:
 
 
 def _check_limit(s: _State) -> str:
-    limit = s.tree.args.get("limit")
+    _restore_output_names(s.tree, s.qualified)
+    limit = s.qualified.args.get("limit")
     current = _literal_limit(limit)
     if current is not None and current <= s.max_rows:
         return f"kept LIMIT {current}"
-    s.tree.set("limit", None)  # also drops FETCH FIRST / LIMIT n% / non-literal LIMIT
-    s.tree = s.tree.limit(s.max_rows, copy=False)
+    s.qualified.set("limit", None)  # also drops FETCH FIRST / LIMIT n% / non-literal LIMIT
+    s.qualified = s.qualified.limit(s.max_rows, copy=False)
     if limit is None:
         return f"added LIMIT {s.max_rows}"
     shown = current if current is not None else limit.sql(config.DIALECT)
@@ -279,7 +301,8 @@ def validate(
         except Exception as e:  # fail closed on anything unexpected (e.g. sqlglot internals)
             return _rejected(checks, name, f"validator error: {type(e).__name__}: {e}")
         checks.append(Check(name, True, detail))
-    return ValidationResult(True, state.tree.sql(dialect=config.DIALECT), checks, None)
+    # Run exactly what the column checks saw: the qualified tree, not the original.
+    return ValidationResult(True, state.qualified.sql(dialect=config.DIALECT), checks, None)
 
 
 # --- helpers ----------------------------------------------------------------------------
@@ -339,18 +362,28 @@ def _check_unqualified_columns(tree: exp.Expression) -> None:
     # (bypass found by the corpus: whole_row_struct).
     for node in tree.find_all(exp.TableColumn):
         raise _Reject(f"table {node.name!r} used as a column (whole-row access)")
+    # Whole-row check against every source name in the query: broader is stricter here.
     sources = {t.alias_or_name.lower() for t in tree.find_all(exp.Table)}
     sources |= {q.alias_or_name.lower() for q in tree.find_all(exp.Subquery) if q.alias_or_name}
     sources |= {c.alias_or_name.lower() for c in tree.find_all(exp.CTE)}
-    aliases = {a.alias.lower() for a in tree.find_all(exp.Alias)}
+    checked: set[int] = set()
+    for scope in traverse_scope(tree):
+        query = scope.expression
+        named = set(query.named_selects) if isinstance(query, exp.Query) else set()
+        for col in scope.walk():
+            if type(col) is not exp.Column or col.table:
+                continue
+            checked.add(id(col))
+            if col.name.lower() in sources:
+                raise _Reject(f"table {col.name!r} used as a column (whole-row access)")
+            # The only bare column left after qualify() is an output alias in the ORDER BY
+            # of its own query (not a window's ORDER BY, not another scope's alias).
+            order = col.find_ancestor(exp.Order)
+            if col.name not in named or order is None or order.parent is not query:
+                raise _Reject(f"column {col.name!r} could not be resolved")
     for col in tree.find_all(exp.Column):
-        if col.table:
-            continue
-        name = col.name.lower()
-        if name in sources:
-            raise _Reject(f"table {name!r} used as a column (whole-row access)")
-        if name not in aliases:
-            raise _Reject(f"column {name!r} could not be resolved")
+        if not col.table and id(col) not in checked:
+            raise _Reject(f"column {col.name!r} could not be resolved")
 
 
 def _check_no_leftover_star(tree: exp.Expression) -> None:
@@ -372,9 +405,19 @@ def _check_join_condition(join: exp.Join) -> None:
     on = join.args.get("on")
     if on is None:
         raise _Reject("JOIN without an ON condition (cartesian product)")
-    tables = {c.table for c in on.find_all(exp.Column) if c.table}
-    if len(tables) < 2:
-        raise _Reject("JOIN condition must compare columns of both sides")
+    # At least one top-level AND term must be an equality between columns of two different
+    # tables. "a.x = a.x AND b.x = b.x" or "a.x = b.x OR TRUE" is a cartesian product.
+    terms = on.unnest().flatten() if isinstance(on.unnest(), exp.And) else [on]
+    if not any(_is_cross_table_equality(term.unnest()) for term in terms):
+        raise _Reject("JOIN condition must equate columns of both sides")
+
+
+def _is_cross_table_equality(node: exp.Expression) -> bool:
+    if not isinstance(node, (exp.EQ, exp.NullSafeEQ)):
+        return False
+    left = {c.table for c in node.left.find_all(exp.Column) if c.table}
+    right = {c.table for c in node.right.find_all(exp.Column) if c.table}
+    return bool(left and right and (left | right) != left & right)
 
 
 def _select_depth(select: exp.Select) -> int:
@@ -384,6 +427,44 @@ def _select_depth(select: exp.Select) -> int:
             depth += 1
         node = node.parent
     return depth
+
+
+def _leftmost_select(node: exp.Expression) -> exp.Select | None:
+    while isinstance(node, (exp.SetOperation, exp.Subquery)):
+        node = node.this
+    return node if isinstance(node, exp.Select) else None
+
+
+def _restore_output_names(original: exp.Expression, qualified: exp.Expression) -> None:
+    """Rename qualify()'s ``_col_<n>`` output aliases to the expression's own SQL text.
+
+    Cosmetic only: result columns read ``COUNT(*)`` instead of ``_col_1``. A root ORDER BY
+    that refers to a renamed alias is renamed with it. Nothing changes when the select
+    lists cannot be matched one to one (a star was expanded).
+    """
+    orig, qual = _leftmost_select(original), _leftmost_select(qualified)
+    if orig is None or qual is None or len(orig.expressions) != len(qual.expressions):
+        return
+    if any(isinstance(e, exp.Star) or e.is_star for e in orig.expressions):
+        return
+    taken = set(qual.named_selects)
+    renames: dict[str, str] = {}
+    for o, q in zip(orig.expressions, qual.expressions, strict=True):
+        if isinstance(o, (exp.Alias, exp.Column)) or not isinstance(q, exp.Alias):
+            continue
+        # Lowercase: DuckDB identifiers are case-insensitive and qualify() lowercases them,
+        # so a mixed-case alias would not survive re-validation unchanged.
+        name = o.sql(config.DIALECT).lower()
+        if name in taken:
+            continue
+        taken.add(name)
+        renames[q.alias] = name
+        q.set("alias", exp.to_identifier(name, quoted=True))
+    for query in {id(qualified): qualified, id(qual): qual}.values():
+        order = query.args.get("order")
+        for col in order.find_all(exp.Column) if order else ():
+            if not col.table and col.name in renames:
+                col.set("this", exp.to_identifier(renames[col.name], quoted=True))
 
 
 def _literal_limit(limit: Any) -> int | None:

@@ -4,6 +4,8 @@
   left, the result is refused.
 - Masks email addresses and phone numbers in string cells, and restricted keys inside
   nested values (structs / maps).
+- Cuts strings longer than MAX_CELL_CHARS, so one cell (``string_agg`` over a whole
+  table) cannot carry what the row cap keeps out.
 - Keeps a preview of at most PREVIEW_ROWS rows for the trace, with row_count and truncated.
 - Converts every cell to a JSON-safe value.
 
@@ -34,6 +36,7 @@ PHONE_RE = re.compile(
 EMAIL_MASK = "[email]"
 PHONE_MASK = "[phone]"
 RESTRICTED_MASK = "[restricted]"
+CUT_MARK = "…[cut]"
 
 
 @dataclass
@@ -45,6 +48,7 @@ class OutputCheck:
     truncated: bool
     dropped_columns: list[str] = field(default_factory=list)
     masked_cells: int = 0
+    cut_cells: int = 0
     reason: str | None = None
 
     def result(self) -> dict[str, Any]:
@@ -59,6 +63,7 @@ class OutputCheck:
         return {
             "dropped_columns": self.dropped_columns,
             "masked_cells": self.masked_cells,
+            "cut_cells": self.cut_cells,
             "preview_rows": len(self.rows),
             "row_count": self.row_count,
             "truncated": self.truncated,
@@ -70,8 +75,11 @@ def check(
     rows: Iterable[Sequence[Any]],
     restricted_names: Iterable[str] | None = None,
     preview_rows: int = config.PREVIEW_ROWS,
+    max_cell_chars: int = config.MAX_CELL_CHARS,
 ) -> OutputCheck:
-    restricted = {n.lower() for n in (restricted_names or config.load_policy().restricted_names)}
+    if restricted_names is None:
+        restricted_names = config.load_policy().restricted_names
+    restricted = {n.lower() for n in restricted_names}
     keep = [i for i, c in enumerate(columns) if c.lower() not in restricted]
     dropped = [c for c in columns if c.lower() in restricted]
     all_rows = list(rows)
@@ -86,16 +94,19 @@ def check(
     if columns and not keep:
         out.ok, out.reason = False, f"every result column is restricted: {', '.join(dropped)}"
         return out
-    masker = _Masker(restricted)
+    masker = _Masker(restricted, max_cell_chars)
     out.rows = [[masker.clean(row[i]) for i in keep] for row in all_rows[:preview_rows]]
     out.masked_cells = masker.count
+    out.cut_cells = masker.cut
     return out
 
 
 class _Masker:
-    def __init__(self, restricted: set[str]) -> None:
+    def __init__(self, restricted: set[str], max_chars: int) -> None:
         self.restricted = restricted
+        self.max_chars = max_chars
         self.count = 0
+        self.cut = 0
 
     def clean(self, value: Any) -> Any:
         if isinstance(value, str):
@@ -113,9 +124,13 @@ class _Masker:
         return self.clean(value)
 
     def _mask_text(self, text: str) -> str:
+        # Mask the whole string first, so the cut cannot leave half an email unmasked.
         masked = PHONE_RE.sub(PHONE_MASK, EMAIL_RE.sub(EMAIL_MASK, text))
         if masked != text:
             self.count += 1
+        if len(masked) > self.max_chars:
+            self.cut += 1
+            masked = masked[: self.max_chars] + CUT_MARK
         return masked
 
 

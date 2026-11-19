@@ -7,7 +7,9 @@ name = "text2sql"
 dynamic = ["version"]
 description = "Safe text-to-SQL pipeline: the LLM proposes, deterministic code decides."
 requires-python = ">=3.11"
-dependencies = ["duckdb>=2.0", "sqlglot>=30.0", "pyyaml>=6.0"]
+# sqlglot is pinned to the tested major: the validator (security boundary) relies on its
+# AST class names and qualify() behaviour. Re-run the red-team corpus before raising it.
+dependencies = ["duckdb>=2.0", "sqlglot>=30.33,<31", "pyyaml>=6.0"]
 
 [tool.setuptools.dynamic]
 version = { file = "VERSION" }

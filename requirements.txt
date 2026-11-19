@@ -1,5 +1,5 @@
 duckdb>=2.0
-sqlglot>=30.0
+sqlglot>=30.33,<31
 pyyaml>=6.0
 pytest>=8.0
 pytest-cov>=6.0

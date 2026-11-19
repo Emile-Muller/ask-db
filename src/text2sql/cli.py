@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from text2sql import config, executor, output_check, prompt, review_log
-from text2sql.input_screen import RAW_SQL, screen
-from text2sql.trace import FAIL, PASS, SKIPPED, TraceBuilder, append, dumps
+from text2sql.input_screen import NATURAL_LANGUAGE, RAW_SQL, screen
+from text2sql.trace import FAIL, PASS, SKIPPED, TraceBuilder, append, check_log_path, dumps
 from text2sql.validator import validate
 
 EXIT_ACCEPTED, EXIT_ERROR, EXIT_REFUSED = 0, 1, 2
@@ -57,7 +57,8 @@ def run_pipeline(
         raise UsageError("--refusal needs the --question it answers")
 
     primary = question if question is not None else sql
-    b = TraceBuilder(primary, RAW_SQL)
+    # Best guess until layer 1 classifies the input (kept if screen() itself raises).
+    b = TraceBuilder(primary, RAW_SQL if question is None else NATURAL_LANGUAGE)
     layer = "input_screen"
     try:
         with b.timed(layer):
@@ -94,14 +95,12 @@ def run_pipeline(
         b.normalized_sql = v.normalized_sql
 
         layer = "executor"
-        with b.timed(layer):
-            try:
+        try:
+            with b.timed(layer):
                 r = executor.execute(v.normalized_sql, db_path=db_path)
-            except executor.ExecutionRefused as e:
-                r, refused = None, e
-        if r is None:
-            b.record(layer, FAIL, {"error_type": refused.error_type, "error": refused.reason})
-            return b.refused(layer, refused.reason)
+        except executor.ExecutionRefused as e:
+            b.record(layer, FAIL, {"error_type": e.error_type, "error": e.reason})
+            return b.refused(layer, e.reason)
         b.record(layer, PASS, {"row_count": r.row_count, "execution_ms": r.duration_ms})
 
         layer = "output_check"
@@ -122,7 +121,7 @@ def _emit(trace: dict[str, Any], trace_file: Path | None) -> int:
     print(dumps(trace))
     try:
         append(trace, trace_file)
-    except OSError as e:
+    except (OSError, ValueError) as e:
         print(f"warning: could not append trace: {e}", file=sys.stderr)
     return {"accepted": EXIT_ACCEPTED, "refused": EXIT_REFUSED}.get(trace["verdict"], EXIT_ERROR)
 
@@ -134,8 +133,10 @@ def cmd_context(args: argparse.Namespace) -> int:
         b.record("input_screen", FAIL, s.details())
         return _emit(b.refused("input_screen", s.reason), args.trace_file)
     if s.input_type == RAW_SQL:
-        print("The input was classified as raw SQL, so generation is skipped. Run it with:")
-        print(f"  python -m text2sql run --sql {json.dumps(s.normalized, ensure_ascii=False)}")
+        # No ready-to-paste command: quoting untrusted SQL for a shell is the caller's job
+        # (double quotes would still expand $(...)).
+        print("The input was classified as raw SQL, so generation is skipped.")
+        print("Run the input unchanged through the raw-SQL path: run --sql '<the input>'")
         return EXIT_ACCEPTED
     print(prompt.build_context(s.normalized, db_path=args.db).prompt, end="")
     return EXIT_ACCEPTED
@@ -163,13 +164,21 @@ def cmd_review(args: argparse.Namespace) -> int:
     return EXIT_ACCEPTED
 
 
+def _log_file(value: str) -> Path:
+    """argparse type: a JSONL log path the CLI may append to (see trace.check_log_path)."""
+    try:
+        return check_log_path(Path(value))
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="python -m text2sql", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--db", type=Path, default=config.DB_PATH, help=argparse.SUPPRESS)
-        p.add_argument("--trace-file", type=Path, default=None, help="JSONL file to append to")
+        p.add_argument("--trace-file", type=_log_file, default=None, help="JSONL file to append to")
 
     p = sub.add_parser("context", help="screen a question and print the generation context")
     p.add_argument("--question", required=True)
@@ -191,7 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("review", help="log a /question-review judgement (JSON on stdin)")
     p.add_argument("--runs-dir", type=Path, default=config.RUNS_DIR, help=argparse.SUPPRESS)
-    p.add_argument("--review-file", type=Path, default=None, help=argparse.SUPPRESS)
+    p.add_argument("--review-file", type=_log_file, default=None, help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_review)
     return parser
 

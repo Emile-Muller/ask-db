@@ -126,7 +126,7 @@ def normalize(text: str) -> str:
 
 
 def classify(text: str) -> str:
-    if _SQL_START.match(text) and _SQL_BODY.search(text[_SQL_START.match(text).end() :]):
+    if (start := _SQL_START.match(text)) and _SQL_BODY.search(text[start.end() :]):
         return RAW_SQL
     if ";" in text and _SQL_KEYWORD.search(text):
         return RAW_SQL

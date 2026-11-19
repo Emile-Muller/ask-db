@@ -125,6 +125,47 @@ def test_restricted_columns_follow_the_policy():
     )
 
 
+def test_normalized_sql_is_the_qualified_tree():
+    """What runs is what was checked: stars expanded from the policy, columns qualified.
+
+    A column that exists in the database but not in schema.yaml can then never be returned
+    by a star, since DuckDB no longer expands it.
+    """
+    policy = config.Policy(tables={"t": ("a", "b")}, restricted=frozenset())
+    result = validate("SELECT * FROM t", policy=policy)
+    assert result.ok, result.reason
+    assert "*" not in result.normalized_sql
+    assert '"t"."a"' in result.normalized_sql and '"t"."b"' in result.normalized_sql
+
+
+def test_unaliased_outputs_keep_readable_names():
+    result = validate(
+        "SELECT order_status, count(*) FROM olist_orders_dataset GROUP BY 1 ORDER BY 2 DESC"
+    )
+    assert result.ok, result.reason
+    assert 'COUNT(*) AS "count(*)"' in result.normalized_sql
+    assert 'ORDER BY "count(*)" DESC' in result.normalized_sql
+    assert "_col_" not in result.normalized_sql
+
+
+def test_sql_length_is_capped():
+    sql = "SELECT " + "1 + " * config.MAX_SQL_CHARS + "1"
+    result = validate(sql)
+    assert not result.ok and result.failed_check == "parse" and "longer than" in result.reason
+
+
+def test_bare_column_alias_only_counts_in_its_own_order_by():
+    # An alias defined in another scope, or used outside ORDER BY, does not resolve a bare column.
+    other_scope = sqlglot.parse_one("SELECT (SELECT 1 AS a) AS x FROM t WHERE a = 1", read="duckdb")
+    with pytest.raises(validator._Reject, match="could not be resolved"):
+        validator._check_unqualified_columns(other_scope)
+    window = sqlglot.parse_one("SELECT 1 AS a, rank() OVER (ORDER BY a) AS r FROM t", read="duckdb")
+    with pytest.raises(validator._Reject, match="could not be resolved"):
+        validator._check_unqualified_columns(window)
+    ok = sqlglot.parse_one("SELECT t.x AS a FROM t ORDER BY a", read="duckdb")
+    validator._check_unqualified_columns(ok)
+
+
 def test_policy_marks_expected_columns_restricted():
     policy = config.load_policy()
     assert policy.is_restricted("olist_customers_dataset", "CUSTOMER_ZIP_CODE_PREFIX")
@@ -186,6 +227,8 @@ def test_function_allowlist_names_exist_in_sqlglot():
 
 
 def test_forbidden_nodes_cover_writes_and_commands():
+    # Every denylisted name must exist: a rename in sqlglot must not shrink the denylist.
+    assert len(validator.FORBIDDEN_NODES) == len(validator._FORBIDDEN_NAMES)
     names = {t.__name__ for t in validator.FORBIDDEN_NODES}
     assert {"Insert", "Update", "Delete", "Drop", "Create", "Command", "Pragma", "Set"} <= names
     assert {"Attach", "Copy", "Use", "Transaction", "Into"} <= names

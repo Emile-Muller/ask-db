@@ -34,15 +34,18 @@ Stage details:
   generation    proposed_sql | refusal_reason, model   (or reason when skipped)
   validator     checks: [{name, passed, detail}], reason
   executor      row_count, execution_ms | error_type, error
-  output_check  dropped_columns, masked_cells, preview_rows, row_count, truncated
+  output_check  dropped_columns, masked_cells, cut_cells, preview_rows, row_count, truncated
+                (cut_cells: strings longer than MAX_CELL_CHARS, cut and marked "…[cut]")
 """
 
 from __future__ import annotations
 
 import json
 import subprocess  # noqa: S404 - only used for a fixed git command
+import tempfile
 import time
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -76,14 +79,18 @@ class TraceBuilder:
         self.stages = {name: Stage(i + 1, name) for i, name in enumerate(LAYERS)}
         self.generated_sql: str | None = None
         self.normalized_sql: str | None = None
-        self._started = 0.0
 
     @contextmanager
-    def timed(self, name: str):
-        """Time a stage: ``with b.timed("validator"): ...`` then ``b.record(...)``."""
-        self._started = time.perf_counter()
-        yield
-        self.stages[name].duration_ms = int((time.perf_counter() - self._started) * 1000)
+    def timed(self, name: str) -> Iterator[None]:
+        """Time a stage: ``with b.timed("validator"): ...`` then ``b.record(...)``.
+
+        The duration is recorded even if the stage raises.
+        """
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.stages[name].duration_ms = int((time.perf_counter() - started) * 1000)
 
     def record(self, name: str, status: str, details: dict[str, Any] | None = None) -> None:
         stage = self.stages[name]
@@ -138,8 +145,21 @@ def default_trace_path() -> Path:
     return config.RUNS_DIR / f"{datetime.now(UTC):%Y%m%d}.jsonl"
 
 
+def check_log_path(path: Path) -> Path:
+    """Return ``path`` resolved if it is a ``.jsonl`` file under LOGS_DIR or the temp dir.
+
+    The CLI is allow-listed for Claude Code, so an unchecked ``--trace-file`` would let a
+    session append to any file, including the pipeline's own code.
+    """
+    resolved = Path(path).resolve()
+    roots = (config.LOGS_DIR.resolve(), Path(tempfile.gettempdir()).resolve())
+    if resolved.suffix != ".jsonl" or not any(resolved.is_relative_to(r) for r in roots):
+        raise ValueError(f"log file must be a .jsonl file under {config.LOGS_DIR}: {path}")
+    return resolved
+
+
 def append(trace: dict[str, Any], path: Path | None = None) -> Path:
-    path = path or default_trace_path()
+    path = check_log_path(path or default_trace_path())
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(trace, ensure_ascii=False, default=str) + "\n")

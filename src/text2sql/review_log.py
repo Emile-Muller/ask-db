@@ -107,7 +107,7 @@ def validate(payload: Any) -> dict[str, Any]:
     if payload["corrected_sql"] is not None:
         _text(payload["corrected_sql"], "corrected_sql", config.REVIEW_MAX_SQL_CHARS)
     if payload["model"] is not None:
-        _text(payload["model"], "model", 100)
+        _text(payload["model"], "model", config.REVIEW_MAX_MODEL_CHARS)
 
     findings = payload["findings"]
     expected = {*FINDING_FIELDS, "unverifiable"}

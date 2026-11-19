@@ -63,8 +63,8 @@ columns in `data/schema.yaml`. The trace format is documented in `trace.py`.
 - `.\.venv\Scripts\python.exe -m pytest --cov` runs offline: no LLM, no network.
 - Keep ruff clean (pre-commit runs `ruff check --fix` and `ruff format`).
 
-## TODO after the build
-`.claude/settings.json` does not yet deny edits to the pipeline, because it is still
-being built. Once it is done, add `"Edit(./src/text2sql/**)"` (and
-`"Edit(./tests/redteam_corpus.yaml)"`) to `permissions.deny`, so a `/question` run can
-never change the code that judges it.
+### 5. The allowlist and red-team corpus are frozen for sessions
+`.claude/settings.json` denies `Edit(./tests/redteam_corpus.yaml)` and
+`Edit(./data/schema.yaml)`, so a `/question` run can never change the allowlist or the
+red-team cases that judge it. To change them, a human removes those rules temporarily, makes
+the change, and puts them back.

@@ -224,6 +224,49 @@ def test_usage_errors_exit_1(argv, capsys):
     assert info.value.code == 1
 
 
+@pytest.mark.parametrize(
+    "target",
+    [
+        config.PROJECT_ROOT / "src" / "text2sql" / "pwned.jsonl",  # outside the log dirs
+        config.LOGS_DIR / "questions" / "x.py",  # not a .jsonl file
+        config.LOGS_DIR / ".." / ".." / "src" / "x.jsonl",  # escapes with ..
+    ],
+)
+def test_log_files_are_confined(target, capsys):
+    """--trace-file / --review-file must not append to arbitrary files (e.g. the pipeline)."""
+    for argv in (
+        ["run", "--sql", "SELECT 1", "--trace-file", str(target)],
+        ["review", "--review-file", str(target)],
+    ):
+        with pytest.raises(SystemExit) as info:
+            cli.main(argv)
+        assert info.value.code == 1 and "log file must be" in capsys.readouterr().err
+    with pytest.raises(ValueError, match="log file must be"):
+        trace.append({"id": "x"}, target)
+    assert not target.exists()
+
+
+def test_timed_records_duration_when_the_stage_raises(monkeypatch):
+    ticks = iter([1.0, 1.25])
+    monkeypatch.setattr(trace.time, "perf_counter", lambda: next(ticks))
+    b = trace.TraceBuilder("q", "natural_language")
+    with pytest.raises(RuntimeError), b.timed("validator"):
+        raise RuntimeError("boom")
+    assert b.stages["validator"].duration_ms == 250
+
+
+@needs_db
+def test_unaliased_columns_keep_readable_names(run):
+    code, t = run(
+        "run", "--sql",
+        "SELECT order_status, count(*) FROM olist_orders_dataset GROUP BY 1 ORDER BY 2 DESC",
+    )  # fmt: skip
+    assert code == 0, t["reason"]
+    assert t["result"]["columns"] == ["order_status", "count(*)"]
+    counts = [row[1] for row in t["result"]["rows"]]
+    assert counts == sorted(counts, reverse=True)
+
+
 def test_default_trace_path_is_under_questions_logs():
     path = trace.default_trace_path()
     assert path.parent == config.RUNS_DIR and path.suffix == ".jsonl"
