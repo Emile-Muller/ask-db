@@ -23,14 +23,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Assemble site
-        run: |
-          mkdir -p _site
-          cp -r showcase/. _site/
-          cp questions/results.json _site/results.json
+      - name: Refresh showcase results
+        run: cp questions/results.json showcase/results.json
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: showcase
       - id: deployment
         uses: actions/deploy-pages@v4

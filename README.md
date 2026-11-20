@@ -16,8 +16,9 @@ trace + review  ◄── L5 output check ◄── L4 sandboxed executor ◄─
 **Stack:** Claude Code skills (the session proposes SQL; Python never calls an LLM), DuckDB
 opened read-only, sqlglot (DuckDB dialect), Olist data (Kaggle, ~100k orders, 2016–2018).
 
-**Showcase:** a one-page static site in [`showcase/`](showcase/) presents the project to
-non-technical readers (see [Showcase page](#showcase-page)).
+**Showcase:** <https://emile-muller.github.io/ask-db/>, a one-page static site built from
+[`showcase/`](showcase/) that presents the project to non-technical readers (see
+[Showcase page](#showcase-page)).
 
 ## Skills
 
@@ -89,7 +90,8 @@ result and the review. It reads only `showcase/results.json`, a copy of
 Preview locally with `.\.venv\Scripts\python.exe -m http.server -d showcase` (opening
 `index.html` from disk blocks loading the JSON); after a new run, refresh the local copy with
 `Copy-Item questions/results.json showcase/results.json`. `.github/workflows/pages.yml`
-publishes `showcase/` to GitHub Pages on every push to `main` that touches it or
+publishes `showcase/` to GitHub Pages
+(<https://emile-muller.github.io/ask-db/>) on every push to `main` that touches it or
 `questions/results.json`, and always deploys the latest `questions/results.json` as the page's
 `results.json`, so the live site needs no manual copy.
 
@@ -181,6 +183,10 @@ tests/           offline tests: one file per layer, CLI, review log, DB build; r
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.4.1 — 2026-11-20
+- Pages workflow copies `questions/results.json` into `showcase/results.json` and uploads `showcase/` directly, with no intermediate `_site` folder
+- README links the live showcase at <https://emile-muller.github.io/ask-db/>
 
 ### 1.4.0 — 2026-11-20
 - New static showcase page in `showcase/` (HTML, CSS, JS, no build step): skills overview, dataset and stack, 5-layer diagram with how many inputs each layer stopped
