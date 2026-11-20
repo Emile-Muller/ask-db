@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a release in a single commit - run all tests, stage all changes, update VERSION and the README version history, commit once and create the annotated vX.Y.Z tag. Use when the user asks to release or cut a version.
+description: Cut a release in a single commit - run all tests, stage all changes, update VERSION and the README version history, commit once with a Conventional Commits message (feat/fix/docs/... picked from the changes) and create the annotated vX.Y.Z tag. Use when the user asks to release or cut a version.
 argument-hint: "[major|minor|patch]"
 disable-model-invocation: true
 ---
@@ -52,12 +52,47 @@ so they go in the same commit.
   (`git restore --staged <path>`) and ask the user (it probably belongs in `.gitignore`).
 
 ## 5. Single commit
-- Message (Conventional Commits, follow the session's commit attribution rules):
-  ```
-  chore(release): X.Y.Z
+The release is still **one commit**, but its message follows
+[Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) and describes what the
+release actually changes, instead of always being `chore(release)`.
 
-  - <same bullets as the README history entry>
-  ```
+### Pick the type
+Look at everything staged (commits since the last tag are already in history; describe the staged diff
+and the README history bullets). Pick the **one** type that best describes the release; if several
+apply, take the highest in this order:
+
+| Type | Use when the release mainly... |
+|---|---|
+| `feat` | adds a user-visible capability (new CLI command/flag, new allowed query shape, new layer check) |
+| `fix` | fixes a bug, incl. a closed guardrail bypass |
+| `perf` | improves performance without changing behavior |
+| `refactor` | restructures code without changing behavior |
+| `test` | only adds or changes tests / red-team cases |
+| `docs` | only changes docs (`README.md`, `CLAUDE.md`, `data/README.md`, skill/agent docs) |
+| `build` | changes dependencies, packaging, the DB build (`src/olist_db/`) |
+| `ci` | changes CI or pre-commit config |
+| `style` | formatting only |
+| `chore` | anything else (tooling, `.claude/` config); only when nothing above fits |
+
+- **Scope** (optional): the main area touched, lowercase, e.g. `validator`, `executor`, `input-screen`,
+  `cli`, `olist-db`, `skills`. Omit it when the release spans several areas.
+- **Breaking change** (bump is `major`): add `!` after the type/scope and a `BREAKING CHANGE:` footer.
+- Consistency with the bump: `feat` → at least `minor`; `!` → `major`. If the requested bump does not
+  match (e.g. `patch` with a `feat`), tell the user and ask which to keep before committing.
+
+### Message format
+Follow the session's commit attribution rules (trailer lines go last, after the footers):
+```
+<type>[(<scope>)][!]: <summary in imperative mood, lowercase, no period, ≤ 72 chars>
+
+- <same bullets as the README history entry>
+
+[BREAKING CHANGE: <what breaks and how to migrate>]
+Release: X.Y.Z
+```
+Examples: `feat(validator): allow window functions in SELECT`, `fix(executor)!: enforce row cap on CTEs`,
+`docs: document the review CLI command`.
+
 - Pass the multi-line message through a file, never inline:
   1. Write it with the Write tool to `commit_msg.txt` in the session scratchpad directory (not the repo,
      so `git status` stays clean).
@@ -79,9 +114,9 @@ so they go in the same commit.
 ## 7. Report
 Checklist:
 - [ ] Tests pass (or: no tests, user approved)
-- [ ] All changes staged and committed in one commit
+- [ ] All changes staged and committed in one commit, Conventional Commits message with the right type
 - [ ] `VERSION` and README version history updated
 - [ ] Tag `vX.Y.Z` created on `HEAD`
 
-End with: old → new version, commit hash, tag, and the publish command (do not run it unless asked):
+End with: old → new version, commit hash and subject line, tag, and the publish command (do not run it unless asked):
 `git push origin main --follow-tags`

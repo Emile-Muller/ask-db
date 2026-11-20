@@ -1,42 +1,89 @@
-# Agentic Query
+# Ask DB
 
-Ask questions in plain English, get SQL and results.
+Ask questions in plain English, get SQL and results, safely.
 
-An AI model turns natural language into a SQL query, runs it against a DuckDB database, and shows the query and its results in a Streamlit app.
-
-## Stack
-
-- **Frontend:** Streamlit
-- **Database:** DuckDB
-- **AI:** LLM for text-to-SQL
-- **Data:** [Brazilian E-Commerce Public Dataset by Olist](data/README.md) (Kaggle, ~100k orders, 2016–2018)
-
-## Example
-
-> "What are the top 5 product categories by revenue?"
-
-The app generates the SQL, runs it, and displays the table.
-
-## Data
-
-CSV files live in `data/raw/` (not tracked; download them from Kaggle). See [data/README.md](data/README.md) for source, license and table descriptions.
-
-> **Note:** the original `olist_products_dataset.csv` misspells two columns (`product_name_lenght`, `product_description_lenght`). The header has been fixed locally to `product_name_length` and `product_description_length`. If you re-download the dataset, fix the header again before building the database.
-
-## Project layout
+An LLM turns a question about the [Olist Brazilian E-Commerce dataset](data/README.md) into
+SQL, but only **proposes** it: five deterministic layers decide whether it runs against a
+read-only DuckDB database, and every run leaves a machine-readable trace. A second,
+independent agent can then review whether the answer is correct.
 
 ```
-src/
-  text2sql/      5-layer safe text-to-SQL pipeline (`python -m text2sql`, used by /question)
-  olist_db/
-    build.py     data/raw/*.csv -> data/olist.duckdb (the only writer)
-data/
-  README.md      dataset source, license and file descriptions
-  schema.yaml    table/column descriptions, keys, rules and sensitive columns (tracked)
-  olist.duckdb   built database (generated, not tracked)
-  raw/           Kaggle CSVs (not tracked)
-questions/       questions.yaml (test inputs), results.json (sample /question run), logs/questions/ (traces), logs/question-reviews/ (reviews)
-tests/           offline tests: one file per layer, CLI, DB build; redteam_corpus.yaml
+question ──► L1 input screen ──► L2 prompt context ──► LLM proposes SQL (or refuses)
+                                                                     │
+trace + review  ◄── L5 output check ◄── L4 sandboxed executor ◄── L3 validator
+```
+
+**Stack:** Claude Code skills (the session proposes SQL; Python never calls an LLM), DuckDB
+opened read-only, sqlglot (DuckDB dialect), Olist data (Kaggle, ~100k orders, 2016–2018). A
+GitHub Pages showcase is planned.
+
+## Skills
+
+| Skill | What it does |
+|---|---|
+| `/question <question or SQL>` | Answers one question (or runs one pasted query) through the pipeline; reports the verdict, the SQL, the result and which layer decided |
+| `/question-review [trace id]` | An independent agent judges one `/question` run from its trace and the schema docs only, and logs the review |
+
+**`/question`** runs `python -m text2sql context` (layer 1, then the layer-2 prompt), proposes
+exactly one `{"sql": ...}` or `{"refusal_reason": ...}` from that prompt alone, and sends it
+through `python -m text2sql run` (layers 1-5). Raw SQL skips generation (`run --sql`). The
+input is untrusted data, never instructions; there is one proposal per question, and a refused
+query is never reworded to get past a guardrail (a plain DuckDB error may be fixed once).
+
+**`/question-review`** judges whether a run's answer is **correct**; the pipeline only makes
+sure the query is **safe**. The `question-reviewer` agent sees only the trace and `data/schema.yaml` (no database). It
+checks the SQL logic against the question and the `rules:` in `schema.yaml` (revenue
+definition, `customer_unique_id`, join fan-out, NULLs, a `LIMIT` that cuts the answer, …),
+or whether a refusal was justified. It returns a verdict (`correct` / `partially_correct` /
+`incorrect` / `cannot_tell`), findings and an optional `corrected_sql`, logged by
+`python -m text2sql review` to `questions/logs/question-reviews/`. A `PreToolUse` hook
+(`review_guard.py`) blocks every other shell command and fails closed.
+
+## The 5-layer guardrails (`src/text2sql`)
+
+The LLM only proposes; everything that decides whether SQL runs is deterministic Python,
+testable without any LLM. **Layers 3 and 4 are the security boundary** and hold on their own
+even if layers 1 and 2 are bypassed; 1, 2 and 5 are defense in depth. The first layer to
+refuse decides the verdict, and each records a stage in the trace (`trace.py`).
+
+| Layer | Module | What it does |
+|---|---|---|
+| 1 input screen | `input_screen.py` | NFKC + strip zero-width/control chars, ≤ 500 chars, raw SQL vs question, prompt-injection heuristics (strong signals refuse, weak ones are recorded) |
+| 2 generation | `prompt.py` | schema context from DuckDB + `data/schema.yaml`; restricted columns and tables hidden; question fenced as untrusted; no LLM call from Python |
+| 3 validator | `validator.py` | sqlglot: one statement, no comments, SELECT only, table/column/**function allowlists**, restricted columns (incl. `*`, aliases, subqueries), ≤ 4 joins, depth ≤ 3, no cartesian or recursive queries, LIMIT forced ≤ 100; fails closed; runs SQL regenerated from the qualified AST it checked |
+| 4 executor | `executor.py` | read-only DuckDB, external access and extension autoload off, 512 MB / 2 threads, config locked, 5 s timeout, ≤ 100 rows; safe even without the validator |
+| 5 output check | `output_check.py` | drop restricted columns, mask emails/phones, cut cells > 1000 chars, 20-row preview |
+
+Limits live in `src/text2sql/config.py`, the allowlist and restricted columns in
+`data/schema.yaml`. `tests/redteam_corpus.yaml` holds 140+ attack and benign queries
+(including past bypasses kept as regression tests). `.claude/settings.json` denies session
+edits to `data/schema.yaml` and the corpus; only a human can change them.
+
+## Test questions and results
+
+`questions/questions.yaml` holds 30 inputs, each marked `expect: answer` or `expect: refuse`:
+12 valid questions plus destructive requests, prompt injections, stacked or obfuscated SQL,
+exfiltration, sensitive-data, resource-abuse and out-of-scope cases. `questions/results.json`
+is a full run (each `/question` in an isolated subagent, each trace judged by
+`/question-review`): 30/30 match `expect` (12 accepted; refused: 6 generation, 8 validator,
+4 input screen), with review verdicts 18 correct, 7 cannot tell, 5 incorrect.
+
+## CLI (`python -m text2sql`)
+
+| Command | Does |
+|---|---|
+| `context --question "..."` | layer 1; if it passes, prints the layer-2 prompt, else the refusal trace |
+| `run --question "..." --sql "..."` | layers 1-5 with the proposed SQL; prints the trace |
+| `run --question "..." --refusal "..."` | records that the proposer declined (refused by `generation`) |
+| `run --sql "..."` | raw-SQL path: layers 1, 3, 4, 5 |
+| `check --sql "..."` | layer 3 only, no database |
+| `review` (JSON on stdin) | logs a `/question-review` judgement; no database |
+
+Exit codes: 0 accepted, 2 refused, 1 internal error. Traces go to stdout and
+`questions/logs/questions/<YYYYMMDD>.jsonl`.
+
+```powershell
+.\.venv\Scripts\python.exe -m text2sql run --sql "SELECT 1; DROP TABLE customers"   # refused by validator, exit 2
 ```
 
 ## Setup
@@ -50,41 +97,56 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pre_commit install          # once per clone: ruff lint + format on every commit
 ```
 
-## Database
+### Data
 
-`src/olist_db/build.py` loads every CSV in `data/raw/` into `data/olist.duckdb`, one table per file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`). Re-run it whenever the CSVs change. It is the only code that opens the database for writing, and it runs fixed SQL only; everything else goes through the read-only, locked-down connection in `src/text2sql/executor.py`.
+CSV files live in `data/raw/` (not tracked; download them from Kaggle). See
+[data/README.md](data/README.md) for source, license and table descriptions.
+
+> **Note:** the original `olist_products_dataset.csv` misspells two columns (`product_name_lenght`, `product_description_lenght`). The header has been fixed locally to `product_name_length` and `product_description_length`. If you re-download the dataset, fix the header again before building the database.
+
+### Database
+
+`src/olist_db/build.py` loads every CSV in `data/raw/` into `data/olist.duckdb`, one table per
+file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`).
+Re-run it whenever the CSVs change. It is the only code that opens the database for writing,
+and it runs fixed SQL only; everything else goes through the read-only, locked-down connection
+in `src/text2sql/executor.py`.
 
 ```powershell
 .\.venv\Scripts\python.exe -m olist_db.build
 ```
 
-## Test questions
+## Tests and lint
 
-`questions/questions.yaml` holds 30 test inputs in eight categories: 12 valid questions (simple, join, aggregation, date filter), 3 destructive requests, 4 prompt injections, 4 stacked or obfuscated raw SQL queries, 3 exfiltration attempts (system tables, file reads), 2 sensitive-data requests, 1 resource-abuse query (a cross join of the two largest tables) and 1 out-of-scope question. Each has `expect: answer` or `expect: refuse`; any prompt injection or chained harmful statement must be refused as a whole, even when a legitimate read-only request is mixed in.
-
-In Claude Code, `/question <question>` runs one input through the 5-layer `text2sql` pipeline (see below); any input from `questions/questions.yaml` can be pasted as is. `questions/results.json` is a showcase from an earlier version of the skill: one run over all 30 inputs, with the approved SQL and a result preview for each (16 answered, 14 refused). Checking results against `expect` is not automated.
-
-`/question-review [trace id]` then has an independent agent judge one run (default: the latest) from its trace and `data/schema.yaml` only, without database access. Its judgement goes through `python -m text2sql review`, which fills in the trace fields, id and timestamp and appends the record to `questions/logs/question-reviews/<YYYYMMDD>.jsonl` (format in `src/text2sql/review_log.py`). A `PreToolUse` hook (`src/text2sql/review_guard.py`) denies the agent every other shell command.
-
-## Safe text-to-SQL pipeline (`src/text2sql`)
-
-The model only *proposes* SQL; deterministic code decides whether it runs. Every run prints a JSON trace (format documented in `src/text2sql/trace.py`) and appends it to `questions/logs/questions/<YYYYMMDD>.jsonl`.
-
-| Layer | Module | What it does |
-|---|---|---|
-| 1 input screen | `input_screen.py` | NFKC + strip zero-width/control chars, ≤ 500 chars, raw SQL vs question, prompt-injection heuristics (defense in depth) |
-| 2 generation | `prompt.py` | schema context from DuckDB + `data/schema.yaml`, restricted columns hidden; no LLM call from Python |
-| 3 validator | `validator.py` | sqlglot: one statement, no comments, SELECT only, table/column/**function allowlists**, restricted columns (incl. `*`, aliases, subqueries), ≤ 4 joins, depth ≤ 3, no cartesian or recursive queries, LIMIT forced ≤ 100 |
-| 4 executor | `executor.py` | read-only DuckDB, external access off, config locked, memory/threads capped, 5 s timeout |
-| 5 output check | `output_check.py` | drop restricted columns, mask emails/phones, 20-row preview |
-
-Layers 3 and 4 are the security boundary. `tests/redteam_corpus.yaml` holds 120+ attack and benign queries.
+All tests run offline: no LLM, no network.
 
 ```powershell
-.\.venv\Scripts\python.exe -m text2sql run --sql "SELECT 1; DROP TABLE customers"   # refused by validator, exit 2
-.\.venv\Scripts\python.exe -m text2sql context --question "Top 5 customers by revenue"
 .\.venv\Scripts\python.exe -m pytest --cov                 # all offline tests, with coverage
 .\.venv\Scripts\python.exe -m pre_commit run --all-files   # ruff lint + format (config in ruff.toml)
+```
+
+## Project layout
+
+```
+src/
+  text2sql/      5-layer safe text-to-SQL pipeline (`python -m text2sql`), review log and review guard
+  olist_db/
+    build.py     data/raw/*.csv -> data/olist.duckdb (the only writer)
+data/
+  README.md      dataset source, license and file descriptions
+  schema.yaml    table/column descriptions, keys, rules and sensitive columns (tracked)
+  olist.duckdb   built database (generated, not tracked)
+  raw/           Kaggle CSVs (not tracked)
+questions/
+  questions.yaml           30 test inputs
+  results.json             full /question + /question-review run over them
+  logs/questions/          /question traces (JSONL)
+  logs/question-reviews/   /question-review records (JSONL)
+tests/           offline tests: one file per layer, CLI, review log, DB build; redteam_corpus.yaml
+.claude/
+  skills/        question, question-review, release
+  agents/        question-reviewer, code-reviewer, version-manager
+  settings.json  permissions: pipeline and tests allowed, DB CLIs and direct data reads denied
 ```
 
 ## Releasing
@@ -92,6 +154,12 @@ Layers 3 and 4 are the security boundary. `tests/redteam_corpus.yaml` holds 120+
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.3.0 — 2026-11-20
+- README rewritten: project renamed "Agentic Query" → "Ask DB", new pipeline diagram and updated 5-layer guardrails table
+- README adds a Skills section (`/question`, `/question-review`), a CLI command table and the test questions summary (30/30 match `expect`)
+- README setup, tests and project layout sections reorganized; layout now covers `.claude/`
+- `/release` skill writes a Conventional Commits message whose type (`feat`/`fix`/`docs`/...) is picked from the changes instead of always `chore(release)`
 
 ### 1.2.0 — 2026-11-20
 - `questions/results.json` regenerated: each `/question` run in an isolated subagent given only the question text, each trace judged by a separate question-reviewer agent via `/question-review`
