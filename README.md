@@ -1,5 +1,14 @@
 # Ask DB
 
+[![Python](https://img.shields.io/badge/Python%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![DuckDB](https://img.shields.io/badge/DuckDB-FFF000?logo=duckdb&logoColor=black)](https://duckdb.org/)
+[![sqlglot](https://img.shields.io/badge/sqlglot-4B8BBE)](https://github.com/tobymao/sqlglot)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-D97757?logo=anthropic&logoColor=white)](https://claude.com/claude-code)
+[![pytest](https://img.shields.io/badge/pytest-0A9EDC?logo=pytest&logoColor=white)](https://pytest.org/)
+[![Ruff](https://img.shields.io/badge/Ruff-D7FF64?logo=ruff&logoColor=black)](https://github.com/astral-sh/ruff)
+[![pre-commit](https://img.shields.io/badge/pre--commit-FAB040?logo=pre-commit&logoColor=black)](https://pre-commit.com/)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-222222?logo=githubpages&logoColor=white)](https://emile-muller.github.io/ask-db/)
+
 Ask questions in plain English, get SQL and results, safely.
 
 An LLM turns a question about the [Olist Brazilian E-Commerce dataset](data/README.md) into
@@ -183,6 +192,10 @@ tests/           offline tests: one file per layer, CLI, review log, DB build; r
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.4.2 — 2026-11-20
+- README shows a row of shields.io badges under the title for the stack: Python, DuckDB, sqlglot, Claude Code, pytest, Ruff and pre-commit
+- GitHub Pages badge links the live showcase
 
 ### 1.4.1 — 2026-11-20
 - Pages workflow copies `questions/results.json` into `showcase/results.json` and uploads `showcase/` directly, with no intermediate `_site` folder
