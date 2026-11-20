@@ -103,6 +103,10 @@ Examples: `feat(validator): allow window functions in SELECT`, `fix(executor)!: 
 - The pre-commit hook (ruff lint + format) runs on this commit. If it fails or modifies files, the
   commit is not made: show the output, and if it only reformatted/auto-fixed files, re-stage them
   (`git add -A`) and commit again once. Never bypass it with `--no-verify`.
+- The hook calls `pre-commit` from PATH, which is only there when the venv is active. Put the venv
+  on PATH in the same PowerShell call as the commit (state does not persist between calls),
+  otherwise it fails with `` `pre-commit` not found. Did you forget to activate your virtualenv? ``:
+  `$env:PATH = "$PWD\.venv\Scripts;$env:PATH"; git commit -F "<absolute path to commit_msg.txt>"`
 - After committing, `git status --porcelain` must be empty.
 
 ## 6. Tag

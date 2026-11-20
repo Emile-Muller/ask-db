@@ -155,6 +155,9 @@ In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.
 
 ## Version history
 
+### 1.3.1 — 2026-11-20
+- `/release` skill puts the venv on PATH in the same PowerShell call as `git commit`, so the pre-commit hook no longer fails with "`pre-commit` not found"
+
 ### 1.3.0 — 2026-11-20
 - README rewritten: project renamed "Agentic Query" → "Ask DB", new pipeline diagram and updated 5-layer guardrails table
 - README adds a Skills section (`/question`, `/question-review`), a CLI command table and the test questions summary (30/30 match `expect`)
