@@ -93,6 +93,11 @@ In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.
 
 ## Version history
 
+### 1.2.0 — 2026-11-20
+- `questions/results.json` regenerated: each `/question` run in an isolated subagent given only the question text, each trace judged by a separate question-reviewer agent via `/question-review`
+- New top-level `generated_at`, `method`, `trace_log` / `review_log` paths and a `summary` (30/30 pass; deciding layer: 12 accepted, 6 generation, 8 validator, 4 input_screen; verdicts: 18 correct, 7 cannot_tell, 5 incorrect)
+- Each result now carries `category`, `expect`, `actual`, `pass`, `verdict`, `decided_by`, the full trace and its review, replacing `type` / `outcome` / `sql` / `result`
+
 ### 1.1.0 — 2026-11-19
 - Validator runs the qualified AST it checked (columns qualified, stars expanded from the policy); `_col_<n>` aliases get readable names
 - Validator fixes: CTE names resolved per scope, alias shadowing in `WHERE` blocked, joins need a cross-table equality, SQL capped at `MAX_SQL_CHARS` (5000)
