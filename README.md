@@ -14,8 +14,10 @@ trace + review  ◄── L5 output check ◄── L4 sandboxed executor ◄─
 ```
 
 **Stack:** Claude Code skills (the session proposes SQL; Python never calls an LLM), DuckDB
-opened read-only, sqlglot (DuckDB dialect), Olist data (Kaggle, ~100k orders, 2016–2018). A
-GitHub Pages showcase is planned.
+opened read-only, sqlglot (DuckDB dialect), Olist data (Kaggle, ~100k orders, 2016–2018).
+
+**Showcase:** a one-page static site in [`showcase/`](showcase/) presents the project to
+non-technical readers (see [Showcase page](#showcase-page)).
 
 ## Skills
 
@@ -67,6 +69,29 @@ exfiltration, sensitive-data, resource-abuse and out-of-scope cases. `questions/
 is a full run (each `/question` in an isolated subagent, each trace judged by
 `/question-review`): 30/30 match `expect` (12 accepted; refused: 6 generation, 8 validator,
 4 input screen), with review verdicts 18 correct, 7 cannot tell, 5 incorrect.
+
+## Showcase page
+
+`showcase/` is a static page (plain HTML, CSS and JS, no build step or dependencies): what the
+two skills do, the dataset and stack, the 5-layer diagram (with how many test inputs each layer
+stopped) and the 30 test inputs, with a summary by category and a filterable table whose rows
+expand to show the input, its path through the layers, the SQL, the validator checks, the
+result and the review. It reads only `showcase/results.json`, a copy of
+`questions/results.json`, and says that it shows a pre-recorded run, not a live one.
+
+| File | Holds |
+|---|---|
+| `index.html` | page structure and static text |
+| `styles.css` | layout, light/dark theme, mobile layout |
+| `app.js` | loads `results.json` and renders stats, summary, table and detail panels |
+| `results.json` | the recorded run shown on the page |
+
+Preview locally with `.\.venv\Scripts\python.exe -m http.server -d showcase` (opening
+`index.html` from disk blocks loading the JSON); after a new run, refresh the local copy with
+`Copy-Item questions/results.json showcase/results.json`. `.github/workflows/pages.yml`
+publishes `showcase/` to GitHub Pages on every push to `main` that touches it or
+`questions/results.json`, and always deploys the latest `questions/results.json` as the page's
+`results.json`, so the live site needs no manual copy.
 
 ## CLI (`python -m text2sql`)
 
@@ -142,6 +167,8 @@ questions/
   results.json             full /question + /question-review run over them
   logs/questions/          /question traces (JSONL)
   logs/question-reviews/   /question-review records (JSONL)
+showcase/        static showcase page (index.html, styles.css, app.js) and its results.json copy
+.github/workflows/pages.yml   deploys showcase/ to GitHub Pages
 tests/           offline tests: one file per layer, CLI, review log, DB build; redteam_corpus.yaml
 .claude/
   skills/        question, question-review, release
@@ -154,6 +181,13 @@ tests/           offline tests: one file per layer, CLI, review log, DB build; r
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.4.0 — 2026-11-20
+- New static showcase page in `showcase/` (HTML, CSS, JS, no build step): skills overview, dataset and stack, 5-layer diagram with how many inputs each layer stopped
+- Showcase lists the 30 test inputs with a summary by category and a filterable table whose rows expand to show details, read from `showcase/results.json` (a copy of `questions/results.json`)
+- New `.github/workflows/pages.yml` deploys `showcase/` to GitHub Pages on pushes to `main` that touch it or `questions/results.json`, always using the latest `questions/results.json`
+- Added an MIT `LICENSE`
+- README documents the showcase (new "Showcase page" section and layout entries), replacing the "showcase is planned" note
 
 ### 1.3.1 — 2026-11-20
 - `/release` skill puts the venv on PATH in the same PowerShell call as `git commit`, so the pre-commit hook no longer fails with "`pre-commit` not found"

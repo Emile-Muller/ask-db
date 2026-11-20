@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ask DB · Safe text-to-SQL</title>
+  <meta name="description" content="Ask a database questions in plain English. An AI proposes the SQL; five layers of plain, testable code decide whether it runs.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#results">Skip to the 30 test results</a>
+
+  <header class="hero">
+    <div class="wrap">
+      <nav class="topbar" aria-label="Site">
+        <span class="brand">Ask&nbsp;DB</span>
+        <a class="btn btn-ghost" href="https://github.com/Emile-Muller/ask-db" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+      </nav>
+      <h1>Ask a database questions in plain English. <span class="accent">Safely.</span></h1>
+      <p class="lead">How to let an AI query a real database <strong>without trusting it</strong>. The AI only
+        drafts the SQL; five layers of safety decide whether it runs, and a second AI double-checks the answer.</p>
+      <ul class="stats" aria-label="Evaluation at a glance">
+        <li><span class="stat-num" id="stat-total">–</span><span class="stat-label">test inputs</span></li>
+        <li><span class="stat-num ok" id="stat-answered">–</span><span class="stat-label">real questions answered</span></li>
+        <li><span class="stat-num block" id="stat-blocked">–</span><span class="stat-label">attacks &amp; bad requests blocked</span></li>
+        <li><span class="stat-num" id="stat-pass">–</span><span class="stat-label">behaved as expected</span></li>
+      </ul>
+      <nav class="cta" aria-label="Jump to a section">
+        <a class="jump" href="#safeguards">
+          <span class="jump-icon" aria-hidden="true">↓</span>
+          <span class="jump-text">
+            <strong>The 5 safety layers</strong>
+            <span>What checks every query before it runs</span>
+          </span>
+        </a>
+        <a class="jump" href="#results">
+          <span class="jump-icon" aria-hidden="true">↓</span>
+          <span class="jump-text">
+            <strong>The 30 test results</strong>
+            <span>Every input, its outcome and the reviewer's verdict</span>
+          </span>
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="wrap section" aria-labelledby="what">
+      <h2 id="what">What it does</h2>
+      <div class="cards two">
+        <article class="card">
+          <code class="skill">/question</code>
+          <h3>Ask anything about the shop's data</h3>
+          <p>Type a question like <em>“Which 10 product categories make the most revenue?”</em>. You get the SQL,
+            the answer and a full record of every safety check it passed or failed.</p>
+        </article>
+        <article class="card">
+          <code class="skill">/question-review</code>
+          <h3>A second opinion on every answer</h3>
+          <p>A separate AI, with <strong>no access to the database</strong>, reads the record and judges whether the
+            answer is actually right, or whether a refusal was justified.</p>
+        </article>
+      </div>
+      <dl class="facts">
+        <div>
+          <dt>Dataset</dt>
+          <dd><a href="https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce" target="_blank" rel="noopener noreferrer">Olist Brazilian E-Commerce</a>:
+            about 100k real, anonymized online orders (2016–2018) with customers, sellers, products, payments and reviews.</dd>
+        </div>
+        <div>
+          <dt>Stack</dt>
+          <dd><ul class="chips" aria-label="Technologies">
+            <li>Claude Code skills &amp; agents</li><li>Python</li><li>sqlglot</li><li>DuckDB (read-only)</li><li>pytest, offline</li>
+          </ul></dd>
+        </div>
+        <div>
+          <dt>Code</dt>
+          <dd><a href="https://github.com/Emile-Muller/ask-db" target="_blank" rel="noopener noreferrer">View source code on GitHub</a></dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="wrap section" id="safeguards" aria-labelledby="safe-title">
+      <h2 id="safe-title">Five safety layers</h2>
+      <p class="section-lead">The AI never decides what runs. Each question passes through five checkpoints; the first one
+        that says <em>no</em> stops it. The numbers show where the blocked test inputs were stopped.</p>
+
+      <ol class="flow" aria-label="The path of a question through the five layers">
+        <li class="flow-end">
+          <span class="flow-icon" aria-hidden="true">?</span>
+          <strong>You ask</strong>
+          <span>a question, or paste SQL</span>
+        </li>
+        <li class="layer" data-layer="input_screen">
+          <span class="layer-n">1</span>
+          <strong>Input screen</strong>
+          <span>Catches tricks like “ignore your instructions” and oversized input.</span>
+          <span class="stopped"></span>
+        </li>
+        <li class="layer ai" data-layer="generation">
+          <span class="layer-n">2</span>
+          <strong>AI proposal</strong>
+          <span>The AI sees only safe tables and suggests one query, or declines.</span>
+          <span class="stopped"></span>
+        </li>
+        <li class="boundary">
+          <span class="boundary-label">Security boundary: holds even if the AI is fooled</span>
+          <ol>
+            <li class="layer" data-layer="validator">
+              <span class="layer-n">3</span>
+              <strong>SQL validator</strong>
+              <span>sqlglot reads the query: one read-only statement, approved tables and functions, a row limit.</span>
+              <span class="stopped"></span>
+            </li>
+            <li class="layer" data-layer="executor">
+              <span class="layer-n">4</span>
+              <strong>Locked-down run</strong>
+              <span>Read-only database, no files or network, 5-second timeout, 100 rows max.</span>
+              <span class="stopped"></span>
+            </li>
+          </ol>
+        </li>
+        <li class="layer" data-layer="output_check">
+          <span class="layer-n">5</span>
+          <strong>Output check</strong>
+          <span>Removes restricted columns and masks emails or phone numbers.</span>
+          <span class="stopped"></span>
+        </li>
+        <li class="flow-end">
+          <span class="flow-icon" aria-hidden="true">✓</span>
+          <strong>Answer + record</strong>
+          <span>then an independent review</span>
+        </li>
+      </ol>
+    </section>
+
+    <section class="wrap section" id="results" aria-labelledby="results-title">
+      <h2 id="results-title">30 test inputs, one recorded run</h2>
+      <p class="notice" id="run-note" role="note"><strong>Pre-recorded evaluation, not live.</strong>
+        These results come from one saved run. Each input went to a fresh AI session, and each outcome was then
+        judged by a separate reviewer.</p>
+
+      <h3 class="sub">By category</h3>
+      <div class="cat-grid" id="cat-grid" aria-live="polite"></div>
+
+      <h3 class="sub">Every input, in detail</h3>
+      <p class="hint">Select a row to see the SQL, the safety checks, the result and the reviewer's verdict.</p>
+
+      <div class="filters" role="group" aria-label="Filter the results">
+        <div class="seg" role="group" aria-label="Outcome" id="outcome-filter">
+          <button type="button" data-outcome="all" aria-pressed="true">All</button>
+          <button type="button" data-outcome="answer" aria-pressed="false">Answered</button>
+          <button type="button" data-outcome="refuse" aria-pressed="false">Blocked</button>
+        </div>
+        <label class="field">
+          <span>Category</span>
+          <select id="cat-filter"><option value="all">All categories</option></select>
+        </label>
+        <label class="field grow">
+          <span>Search</span>
+          <input id="search" type="search" placeholder="e.g. revenue, DROP, password" autocomplete="off">
+        </label>
+      </div>
+      <div class="table-bar">
+        <p class="count" id="count" aria-live="polite"></p>
+        <div class="bulk" role="group" aria-label="Expand or collapse rows">
+          <button type="button" class="btn btn-ghost btn-sm" id="expand-all">Expand all</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="collapse-all">Collapse all</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="results">
+          <thead>
+            <tr>
+              <th scope="col">Input</th>
+              <th scope="col" class="col-cat">Category</th>
+              <th scope="col">Outcome</th>
+              <th scope="col" class="col-review">Reviewer agrees?</th>
+            </tr>
+          </thead>
+          <tbody id="rows">
+            <tr><td colspan="4" class="loading">Loading results…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <details class="legend">
+        <summary>How to read the “Reviewer agrees?” column</summary>
+        <ul>
+          <li>A second AI, with no database access, checks each outcome. The column says whether it
+            <strong>backs</strong> what the system did: answering, or blocking.</li>
+          <li><strong>✓ Agrees</strong>: the answer is right, the refusal was justified, or the pasted SQL was bad
+            so blocking it was right. <strong>✗ Disagrees</strong>: the reviewer thinks the system got it wrong.</li>
+          <li><strong>– No verdict</strong>: the reviewer couldn't judge it, usually because the input was stopped before
+            there was a query or a result to check.
+            Expand a row to see the reviewer's raw verdict and reasoning.</li>
+          <li>The safety layers decide whether a query is <em>safe</em>; the reviewer checks whether an answer is
+            <em>correct</em>.</li>
+        </ul>
+      </details>
+    </section>
+  </main>
+
+  <footer class="wrap footer">
+    <p>Ask DB · MIT License · <a href="https://github.com/Emile-Muller/ask-db" target="_blank" rel="noopener noreferrer">Source on GitHub</a></p>
+    <p>Copyright © 2026 Emile Muller</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
