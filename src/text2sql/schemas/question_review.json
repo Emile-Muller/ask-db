@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "question-review.schema.json",
+  "title": "/question-review judgement",
+  "description": "The reviewer's input to `python -m text2sql review`. This file IS the contract: src/text2sql/review_log.py checks every review against it before logging (limits mirror config.REVIEW_MAX_*, kept equal by a test; on top of this schema the whole JSON is at most config.REVIEW_MAX_INPUT_CHARS characters and `trace_id` must name an existing trace). Only the judgement: the writer copies the trace fields from the trace found by `trace_id` and generates `id`, `timestamp`, `review_type` and `meta.git_commit`.",
+  "type": "object",
+  "required": ["trace_id", "verdict", "confidence", "findings", "corrected_sql", "injection_attempt", "summary", "model"],
+  "additionalProperties": false,
+  "properties": {
+    "trace_id": {
+      "description": "The reviewed trace's `id`.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "minLength": 32,
+      "maxLength": 32
+    },
+    "verdict": {
+      "description": "For a refusal review, `correct` means the refusal was right.",
+      "enum": ["correct", "partially_correct", "incorrect", "cannot_tell"]
+    },
+    "confidence": {
+      "enum": ["high", "medium", "low"]
+    },
+    "findings": {
+      "type": "object",
+      "required": ["logic", "data", "unverifiable", "assumptions"],
+      "additionalProperties": false,
+      "properties": {
+        "logic": {
+          "description": "Problems in the SQL logic.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "required": ["issue", "impact", "fix"],
+            "additionalProperties": false,
+            "properties": {
+              "issue": {"$ref": "#/$defs/text"},
+              "impact": {"$ref": "#/$defs/text"},
+              "fix": {"type": ["string", "null"], "pattern": "\\S", "maxLength": 2000}
+            }
+          }
+        },
+        "data": {
+          "description": "Problems in the returned data.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "required": ["issue", "impact"],
+            "additionalProperties": false,
+            "properties": {
+              "issue": {"$ref": "#/$defs/text"},
+              "impact": {"$ref": "#/$defs/text"}
+            }
+          }
+        },
+        "unverifiable": {
+          "description": "Claims that cannot be checked from the trace (e.g. rows past the preview).",
+          "type": "array",
+          "maxItems": 20,
+          "items": {"$ref": "#/$defs/text"}
+        },
+        "assumptions": {
+          "description": "Interpretations the SQL made.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "required": ["assumption", "reasonable"],
+            "additionalProperties": false,
+            "properties": {
+              "assumption": {"$ref": "#/$defs/text"},
+              "reasonable": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "corrected_sql": {
+      "description": "Only when a short fix is clear, else null.",
+      "type": ["string", "null"],
+      "pattern": "\\S",
+      "maxLength": 5000
+    },
+    "injection_attempt": {
+      "description": "True when the trace tried to instruct the reviewer.",
+      "type": "boolean"
+    },
+    "summary": {
+      "description": "One or two sentences.",
+      "$ref": "#/$defs/text"
+    },
+    "model": {
+      "description": "The reviewer's model id.",
+      "type": ["string", "null"],
+      "pattern": "\\S",
+      "maxLength": 100
+    }
+  },
+  "$defs": {
+    "text": {
+      "description": "Not blank.",
+      "type": "string",
+      "pattern": "\\S",
+      "maxLength": 2000
+    }
+  }
+}

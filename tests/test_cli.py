@@ -50,7 +50,7 @@ def assert_trace_shape(t: dict) -> None:
     else:
         assert t["result"] is None and t["reason"]
     assert set(t["meta"]) == {"model", "git_commit"}
-    json.dumps(t)
+    assert trace.schema_errors(json.loads(json.dumps(t))) == []
 
 
 @pytest.fixture()

@@ -27,8 +27,10 @@ Judge only from the trace and the schema docs.
 Your review is logged by exactly one command, with your JSON in a quoted heredoc:
 
     .venv/Scripts/python.exe -m text2sql review <<'EOF'
-    { ...your review JSON... }
+    { "trace_id": "...", "model": "<your model id>", ...the rest of your review JSON... }
     EOF
+
+The JSON must include `model` (your own model id). The writer rejects a review without it.
 
 A hook (`src/text2sql/review_guard.py`) denies every other shell call, so do not try
 anything else. Exit code 0 means logged, 2 means rejected (the reason is on stderr: fix

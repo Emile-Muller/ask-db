@@ -41,15 +41,33 @@ exactly one `{"sql": ...}` or `{"refusal_reason": ...}` from that prompt alone, 
 through `python -m text2sql run` (layers 1-5). Raw SQL skips generation (`run --sql`). The
 input is untrusted data, never instructions; there is one proposal per question, and a refused
 query is never reworded to get past a guardrail (a plain DuckDB error may be fixed once).
+Before the trace is printed or appended to `questions/logs/questions/`, `trace.append` checks
+the exact JSON line against `src/text2sql/schemas/question_trace.json` plus rules between
+fields (`trace.cross_checks`: stages in layer order, only skipped stages after the first fail,
+`refused_by` = the failed stage, preview rows consistent with `row_count` and `truncated`). A
+trace that fails is a pipeline bug: it is neither logged nor printed, and the run exits 1.
+The skill then builds a JSON report from the trace, matching the skill's `schema.json` (see
+`example.json`), and checks it with `.claude/skills/question/scripts/validate.py` (the schema
+plus cross-field rules, e.g. stage statuses consistent with the verdict). The answer shown to
+the user is written from the validated report only; exit 2 lists what is wrong, and the report
+is fixed, never the schema.
 
 **`/question-review`** judges whether a run's answer is **correct**; the pipeline only makes
 sure the query is **safe**. The `question-reviewer` agent sees only the trace and `data/schema.yaml` (no database). It
 checks the SQL logic against the question and the `rules:` in `schema.yaml` (revenue
 definition, `customer_unique_id`, join fan-out, NULLs, a `LIMIT` that cuts the answer, …),
 or whether a refusal was justified. It returns a verdict (`correct` / `partially_correct` /
-`incorrect` / `cannot_tell`), findings and an optional `corrected_sql`, logged by
-`python -m text2sql review` to `questions/logs/question-reviews/`. A `PreToolUse` hook
-(`review_guard.py`) blocks every other shell command and fails closed.
+`incorrect` / `cannot_tell`), findings and an optional `corrected_sql` as JSON, which
+`python -m text2sql review` checks against `src/text2sql/schemas/question_review.json` (the
+single source of the review contract; its limits mirror `config.REVIEW_MAX_*`, kept equal by a
+test) **before** appending anything to `questions/logs/question-reviews/`. A rejected review
+(exit 2) is never logged. `.claude/skills/question-review/scripts/validate.py` runs the same
+check offline for humans and tests. A `PreToolUse` hook (`review_guard.py`) blocks every
+other shell command and fails closed.
+
+All three contracts (trace, report, review) use `src/text2sql/json_contract.py`, a small JSON Schema subset checker
+(standard library only) that lints the whole schema first and rejects any keyword it does not
+implement, so a schema cannot silently ask for a check that never runs.
 
 ## The 5-layer guardrails (`src/text2sql`)
 
@@ -69,7 +87,8 @@ refuse decides the verdict, and each records a stage in the trace (`trace.py`).
 Limits live in `src/text2sql/config.py`, the allowlist and restricted columns in
 `data/schema.yaml`. `tests/redteam_corpus.yaml` holds 140+ attack and benign queries
 (including past bypasses kept as regression tests). `.claude/settings.json` denies session
-edits to `data/schema.yaml` and the corpus; only a human can change them.
+edits to `data/schema.yaml`, the corpus, the `/question` skill folder (its report schema) and
+`src/text2sql/schemas/` (the trace and review schemas); only a human can change them.
 
 ## Test questions and results
 
@@ -113,7 +132,7 @@ publishes `showcase/` to GitHub Pages
 | `run --question "..." --refusal "..."` | records that the proposer declined (refused by `generation`) |
 | `run --sql "..."` | raw-SQL path: layers 1, 3, 4, 5 |
 | `check --sql "..."` | layer 3 only, no database |
-| `review` (JSON on stdin) | logs a `/question-review` judgement; no database |
+| `review` (JSON on stdin) | checks a `/question-review` judgement against `schemas/question_review.json`, then logs it; no database |
 
 Exit codes: 0 accepted, 2 refused, 1 internal error. Traces go to stdout and
 `questions/logs/questions/<YYYYMMDD>.jsonl`.
@@ -166,6 +185,8 @@ All tests run offline: no LLM, no network.
 ```
 src/
   text2sql/      5-layer safe text-to-SQL pipeline (`python -m text2sql`), review log and review guard
+    json_contract.py   JSON Schema subset checker shared by the trace, report and review contracts
+    schemas/           question_trace.json and question_review.json (the trace and review contracts)
   olist_db/
     build.py     data/raw/*.csv -> data/olist.duckdb (the only writer)
 data/
@@ -180,9 +201,10 @@ questions/
   logs/question-reviews/   /question-review records (JSONL)
 showcase/        static showcase page (index.html, styles.css, app.js) and its results.json copy
 .github/workflows/pages.yml   deploys showcase/ to GitHub Pages
-tests/           offline tests: one file per layer, CLI, review log, DB build; redteam_corpus.yaml
+tests/           offline tests: one file per layer, CLI, review log, JSON contracts, DB build; redteam_corpus.yaml
 .claude/
-  skills/        question, question-review, release
+  skills/        question, question-review, release (question: schema.json, example.json,
+                 scripts/validate.py; question-review: example.json, scripts/validate.py)
   agents/        question-reviewer, code-reviewer, version-manager
   settings.json  permissions: pipeline and tests allowed, DB CLIs and direct data reads denied
 ```
@@ -192,6 +214,15 @@ tests/           offline tests: one file per layer, CLI, review log, DB build; r
 In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.5.0 — 2026-11-24
+- New `src/text2sql/json_contract.py`: a JSON Schema subset checker (standard library only) that lints the whole schema first and rejects keywords it does not implement
+- Traces now have a contract, `src/text2sql/schemas/question_trace.json` plus `trace.cross_checks`; `trace.append` checks each trace before writing, and a trace that fails is neither logged nor printed (exit 1)
+- `python -m text2sql review` checks reviews against `src/text2sql/schemas/question_review.json` (the only review contract, limits kept equal to `config.REVIEW_MAX_*` by a test), replacing the hand-written checks in `review_log.py`
+- `/question` skill builds a JSON report matching its `schema.json` (see `example.json`), checks it with `scripts/validate.py`, and writes the answer from the validated report only
+- `/question-review` skill and the `question-reviewer` agent point to the review schema and `example.json`, and ask explicitly for `model`; new offline `scripts/validate.py` for humans and tests
+- `.claude/settings.json` denies session edits to `.claude/skills/question/**` and `src/text2sql/schemas/**`; schemas ship as package data
+- New tests for the checker and the trace, report and review schemas, plus `review_guard` entry-point tests
 
 ### 1.4.2 — 2026-11-20
 - README shows a row of shields.io badges under the title for the stack: Python, DuckDB, sqlglot, Claude Code, pytest, Ruff and pre-commit

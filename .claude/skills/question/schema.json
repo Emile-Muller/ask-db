@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "question-report.schema.json",
+  "title": "/question report",
+  "description": "Final output of one /question run. Every value except `assumptions` is copied from the run's trace (src/text2sql/trace.py). No field is derivable from another: layer numbers follow from layer names, `truncated` from len(rows) < row_count, the generation details from `sql.proposed`; the rest stays in the trace, found by `trace_id`.",
+  "type": "object",
+  "required": ["trace_id", "input", "input_type", "verdict", "decided_by", "reason", "sql", "result", "stages", "assumptions"],
+  "additionalProperties": false,
+  "properties": {
+    "trace_id": {
+      "description": "Trace `id`.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "minLength": 32,
+      "maxLength": 32
+    },
+    "input": {
+      "description": "Trace `input`, unchanged.",
+      "type": "string",
+      "minLength": 1
+    },
+    "input_type": {
+      "description": "Trace `input_type`.",
+      "enum": ["natural_language", "raw_sql"]
+    },
+    "verdict": {
+      "description": "Trace `verdict`.",
+      "enum": ["accepted", "refused", "error"]
+    },
+    "decided_by": {
+      "description": "Trace `refused_by`: the layer that refused (or crashed). Layer number = position in `stages`.",
+      "enum": ["input_screen", "generation", "validator", "executor", "output_check", null]
+    },
+    "reason": {
+      "description": "Trace `reason`.",
+      "type": ["string", "null"]
+    },
+    "sql": {
+      "type": "object",
+      "required": ["proposed", "executed"],
+      "additionalProperties": false,
+      "properties": {
+        "proposed": {
+          "description": "Trace `generated_sql`: the SQL the session proposed (null on the raw-SQL path or when generation refused).",
+          "type": ["string", "null"]
+        },
+        "executed": {
+          "description": "Trace `normalized_sql`: the SQL that passed the validator and ran.",
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "result": {
+      "description": "Trace `result` without `truncated`; null unless accepted.",
+      "type": ["object", "null"],
+      "required": ["columns", "rows", "row_count"],
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "rows": {
+          "description": "Preview rows (at most config.PREVIEW_ROWS = 20), one value per column.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {"type": "array"}
+        },
+        "row_count": {
+          "description": "Rows fetched; greater than len(rows) when the preview is truncated.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "stages": {
+      "description": "Status of each layer, in layer order (1 input_screen ... 5 output_check).",
+      "type": "object",
+      "required": ["input_screen", "generation", "validator", "executor", "output_check"],
+      "additionalProperties": false,
+      "properties": {
+        "input_screen": {"$ref": "#/$defs/status"},
+        "generation": {"$ref": "#/$defs/status"},
+        "validator": {"$ref": "#/$defs/status"},
+        "executor": {"$ref": "#/$defs/status"},
+        "output_check": {"$ref": "#/$defs/status"}
+      }
+    },
+    "assumptions": {
+      "description": "Interpretations the proposed SQL made (e.g. which date column), one sentence each. Empty when none, or when nothing was proposed.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"verdict": {"const": "accepted"}}},
+      "then": {
+        "properties": {
+          "decided_by": {"const": null},
+          "reason": {"const": null},
+          "sql": {"properties": {"executed": {"type": "string"}}},
+          "result": {"type": "object"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"verdict": {"const": "refused"}}},
+      "then": {
+        "properties": {
+          "decided_by": {"type": "string"},
+          "reason": {"type": "string"},
+          "result": {"const": null}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"verdict": {"const": "error"}}},
+      "then": {
+        "properties": {
+          "reason": {"type": "string"},
+          "result": {"const": null}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"input_type": {"const": "raw_sql"}}},
+      "then": {
+        "properties": {
+          "sql": {"properties": {"proposed": {"const": null}}},
+          "stages": {"properties": {"generation": {"const": "skipped"}}}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "status": {"enum": ["pass", "fail", "skipped"]}
+  }
+}

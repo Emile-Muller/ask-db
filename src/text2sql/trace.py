@@ -24,6 +24,10 @@ fields only in a backwards-compatible way.
   "meta": {"model": str | null, "git_commit": str}
 }
 
+This block is a summary; the contract is ``schemas/question_trace.json`` plus
+``cross_checks`` below. ``append`` checks the exact JSON line against both before writing
+and raises ``TraceError`` (nothing written) when it does not match.
+
 Stage names: input_screen, generation, validator, executor, output_check. A stage after
 the first failure is "skipped"; generation is also "skipped" on the raw-SQL path, where
 later stages still run. ``rows`` holds at most PREVIEW_ROWS rows; ``row_count`` is the
@@ -53,11 +57,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from text2sql import config
+from text2sql import config, json_contract
 
 LAYERS: tuple[str, ...] = ("input_screen", "generation", "validator", "executor", "output_check")
 PASS, FAIL, SKIPPED = "pass", "fail", "skipped"
 ACCEPTED, REFUSED, ERROR = "accepted", "refused", "error"
+SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "question_trace.json"
+
+
+class TraceError(ValueError):
+    """The trace does not match its contract (a pipeline bug): it is not logged."""
 
 
 @dataclass
@@ -158,11 +167,58 @@ def check_log_path(path: Path) -> Path:
     return resolved
 
 
+def cross_checks(trace: dict[str, Any]) -> list[str]:
+    """Rules between fields that the schema cannot express (run after it passes)."""
+    errors: list[str] = []
+    stages = trace["stages"]
+    if [s["name"] for s in stages] != list(LAYERS) or [s["layer"] for s in stages] != list(
+        range(1, len(LAYERS) + 1)
+    ):
+        errors.append(f"$.stages: must be layers 1-{len(LAYERS)} in order {', '.join(LAYERS)}")
+    statuses = [s["status"] for s in stages]
+    failed = statuses.index(FAIL) if FAIL in statuses else None
+    if failed is not None and any(s != SKIPPED for s in statuses[failed + 1 :]):
+        errors.append("$.stages: every stage after the first fail must be skipped")
+    failed_name = None if failed is None else stages[failed]["name"]
+    if trace["refused_by"] != failed_name:
+        errors.append(f"$.refused_by: {trace['refused_by']}, yet the failed stage is {failed_name}")
+    if result := trace["result"]:
+        width = len(result["columns"])
+        for i, row in enumerate(result["rows"]):
+            if len(row) != width:
+                errors.append(f"$.result.rows[{i}]: {len(row)} values for {width} columns")
+        shown, expected = len(result["rows"]), min(result["row_count"], config.PREVIEW_ROWS)
+        if shown != expected:
+            errors.append(f"$.result.rows: {shown} rows, expected {expected}")
+        if result["truncated"] != (result["row_count"] > shown):
+            errors.append("$.result.truncated: must be true exactly when row_count > len(rows)")
+    return errors
+
+
+def schema_errors(trace: Any) -> list[str]:
+    """Return the errors of a trace (in its JSON form) against the contract; empty when valid."""
+    return json_contract.check_schema(trace, SCHEMA_PATH) or cross_checks(trace)
+
+
 def append(trace: dict[str, Any], path: Path | None = None) -> Path:
+    """Append the trace as one JSON line, after checking that exact line against the contract."""
     path = check_log_path(path or default_trace_path())
+    line = json.dumps(trace, ensure_ascii=False, default=str)
+    if errors := schema_errors(json.loads(line)):
+        raise TraceError("; ".join(json_contract.capped(errors)))
+    return _write_line(line, path)
+
+
+def append_jsonl(record: dict[str, Any], path: Path) -> Path:
+    """Append any record (e.g. a review, checked by its own writer) as one JSON line."""
+    path = check_log_path(path)
+    return _write_line(json.dumps(record, ensure_ascii=False, default=str), path)
+
+
+def _write_line(line: str, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(trace, ensure_ascii=False, default=str) + "\n")
+        f.write(line + "\n")
     return path
 
 

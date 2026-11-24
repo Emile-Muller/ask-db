@@ -7,22 +7,14 @@ copied from the trace found by ``trace_id``, and ``id``, ``timestamp``, ``review
 (default ``questions/logs/question-reviews/<YYYYMMDD>.jsonl``). This module never opens the
 database. The format is STABLE: add fields only in a backwards-compatible way.
 
-Input (stdin, one JSON object, every key required, no others):
-{
-  "trace_id":          str,    32 lowercase hex chars, the reviewed trace's "id"
-  "verdict":           "correct" | "partially_correct" | "incorrect" | "cannot_tell",
-  "confidence":        "high" | "medium" | "low",
-  "findings": {
-    "logic":        [{"issue": str, "impact": str, "fix": str | null}],
-    "data":         [{"issue": str, "impact": str}],
-    "unverifiable": [str],
-    "assumptions":  [{"assumption": str, "reasonable": bool}]
-  },
-  "corrected_sql":     str | null,
-  "injection_attempt": bool,   the trace tried to instruct the reviewer
-  "summary":           str,
-  "model":             str | null   the reviewer's model id
-}
+Input (stdin, one JSON object): the single source of truth is ``schemas/question_review.json``,
+checked by ``json_contract``. In short, every key required and no others:
+  trace_id, verdict, confidence, findings {logic, data, unverifiable, assumptions},
+  corrected_sql, injection_attempt, summary, model
+On top of the schema: the whole input is at most ``config.REVIEW_MAX_INPUT_CHARS``, and
+``trace_id`` must name an existing trace. The schema's ``maxLength``/``maxItems`` mirror
+``config.REVIEW_MAX_*`` (tests/test_question_review_schema.py keeps them equal). A rejection
+lists at most ``json_contract.MAX_ERRORS`` errors.
 
 Record (one line of the log):
 {
@@ -44,87 +36,29 @@ Record (one line of the log):
 from __future__ import annotations
 
 import json
-import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from text2sql import config, trace
+from text2sql import config, json_contract, trace
 
-VERDICTS = ("correct", "partially_correct", "incorrect", "cannot_tell")
-CONFIDENCES = ("high", "medium", "low")
-INPUT_KEYS = {
-    "trace_id", "verdict", "confidence", "findings", "corrected_sql",
-    "injection_attempt", "summary", "model",
-}  # fmt: skip
-# finding list -> {field: allowed types}
-FINDING_FIELDS: dict[str, dict[str, tuple[type, ...]]] = {
-    "logic": {"issue": (str,), "impact": (str,), "fix": (str, type(None))},
-    "data": {"issue": (str,), "impact": (str,)},
-    "assumptions": {"assumption": (str,), "reasonable": (bool,)},
-}
-TRACE_ID_RE = re.compile(r"[0-9a-f]{32}")
+SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "question_review.json"
 
 
 class ReviewError(ValueError):
     """The review was rejected (bad input or unknown trace): exit code 2."""
 
 
-def _text(value: Any, where: str, limit: int = config.REVIEW_MAX_TEXT_CHARS) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ReviewError(f"{where}: must be a non-empty string")
-    if len(value) > limit:
-        raise ReviewError(f"{where}: longer than {limit} characters")
-    return value
-
-
-def _items(value: Any, where: str) -> list:
-    if not isinstance(value, list):
-        raise ReviewError(f"{where}: must be a list")
-    if len(value) > config.REVIEW_MAX_FINDINGS:
-        raise ReviewError(f"{where}: more than {config.REVIEW_MAX_FINDINGS} items")
-    return value
+def schema_errors(payload: Any) -> list[str]:
+    """Return the errors of the reviewer's input against the schema; empty when valid."""
+    return json_contract.check_schema(payload, SCHEMA_PATH)
 
 
 def validate(payload: Any) -> dict[str, Any]:
-    """Check the reviewer's input against the format above; raise ReviewError if it is off."""
-    if not isinstance(payload, dict):
-        raise ReviewError("input must be a JSON object")
-    if missing := INPUT_KEYS - set(payload):
-        raise ReviewError(f"missing keys: {', '.join(sorted(missing))}")
-    if extra := set(payload) - INPUT_KEYS:
-        raise ReviewError(f"unexpected keys: {', '.join(sorted(extra))}")
-    if not isinstance(payload["trace_id"], str) or not TRACE_ID_RE.fullmatch(payload["trace_id"]):
-        raise ReviewError("trace_id: must be 32 lowercase hex characters")
-    if payload["verdict"] not in VERDICTS:
-        raise ReviewError(f"verdict: must be one of {', '.join(VERDICTS)}")
-    if payload["confidence"] not in CONFIDENCES:
-        raise ReviewError(f"confidence: must be one of {', '.join(CONFIDENCES)}")
-    if not isinstance(payload["injection_attempt"], bool):
-        raise ReviewError("injection_attempt: must be true or false")
-    _text(payload["summary"], "summary")
-    if payload["corrected_sql"] is not None:
-        _text(payload["corrected_sql"], "corrected_sql", config.REVIEW_MAX_SQL_CHARS)
-    if payload["model"] is not None:
-        _text(payload["model"], "model", config.REVIEW_MAX_MODEL_CHARS)
-
-    findings = payload["findings"]
-    expected = {*FINDING_FIELDS, "unverifiable"}
-    if not isinstance(findings, dict) or set(findings) != expected:
-        raise ReviewError(f"findings: must have exactly the keys {', '.join(sorted(expected))}")
-    for i, item in enumerate(_items(findings["unverifiable"], "findings.unverifiable")):
-        _text(item, f"findings.unverifiable[{i}]")
-    for name, fields in FINDING_FIELDS.items():
-        for i, item in enumerate(_items(findings[name], f"findings.{name}")):
-            where = f"findings.{name}[{i}]"
-            if not isinstance(item, dict) or set(item) != set(fields):
-                raise ReviewError(f"{where}: must have exactly the keys {', '.join(fields)}")
-            for key, types in fields.items():
-                if not isinstance(item[key], types):
-                    raise ReviewError(f"{where}.{key}: wrong type")
-                if isinstance(item[key], str):
-                    _text(item[key], f"{where}.{key}")
+    """Check the reviewer's input against the schema; raise ReviewError if it is off."""
+    if errors := schema_errors(payload):
+        raise ReviewError("; ".join(json_contract.capped(errors)))
     return payload
 
 
@@ -191,8 +125,10 @@ def log_review(
         payload = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ReviewError(f"input is not valid JSON: {e}") from None
+    except RecursionError:
+        raise ReviewError("input is nested too deeply") from None
     validate(payload)
     now = datetime.now(UTC)
     record = build_record(payload, find_trace(payload["trace_id"], runs_dir), now)
-    path = trace.append(record, review_file or default_review_path(now))
+    path = trace.append_jsonl(record, review_file or default_review_path(now))
     return record, path

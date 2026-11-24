@@ -50,29 +50,25 @@ top-N) and check that each one maps to the SQL. Then check the SQL against the s
   cannot check because of that.
 
 ## 5. Log the review
-Send your judgement to the review log writer, as one JSON object in a quoted heredoc:
+Produce JSON matching `src/text2sql/schemas/question_review.json`; see `example.json` (in
+this skill's folder). All eight top-level fields are required: `trace_id`, `model`,
+`verdict`, `confidence`, `findings`, `corrected_sql`, `injection_attempt`, `summary`.
+
+**Do not forget `model`**: set it to your own model id (for example `"claude-opus-5-5"`).
+It is the field most often left out, and the writer rejects the review without it.
+
+Send it to the review log writer in a quoted heredoc:
 
     .venv/Scripts/python.exe -m text2sql review <<'EOF'
-    {"trace_id": "<id>", "verdict": "correct", "confidence": "high",
-     "findings": {"logic": [], "data": [], "unverifiable": [], "assumptions": []},
-     "corrected_sql": null, "injection_attempt": false,
-     "summary": "<one or two sentences>", "model": "<your model id>"}
+    <the review JSON>
     EOF
 
-Every key is required and no others are accepted. The full format is in the docstring
-of `src/text2sql/review_log.py`:
-- `verdict`: `correct` / `partially_correct` / `incorrect` / `cannot_tell`. For a
-  refusal review, `correct` means the refusal was right.
-- `confidence`: `high` / `medium` / `low`.
-- `findings.logic`: `[{"issue", "impact", "fix"}]` (`fix` may be null);
-  `findings.data`: `[{"issue", "impact"}]`; `findings.unverifiable`: `[str]`;
-  `findings.assumptions`: `[{"assumption", "reasonable": bool}]`.
-- `corrected_sql`: only when a short fix is clear, else null.
-
-Do not send trace fields (`input`, verdicts, SQL, timestamps): the writer copies them
-from the trace, derives `review_type`, generates `id` and `timestamp`, and appends the
-record to `questions/logs/question-reviews/<YYYYMMDD>.jsonl`. It prints the record.
-Exit 2 means the JSON was rejected: read the reason, fix it and retry once.
+The writer checks it against that schema before logging anything, so this is also the
+validation step (`scripts/validate.py` runs the same check offline for humans and tests;
+you cannot run it). It copies the trace fields, generates `id` and `timestamp`, and appends
+the record to `questions/logs/question-reviews/<YYYYMMDD>.jsonl`. It prints the record.
+Exit 2 means the JSON was rejected: read the reason, fix the JSON (never the schema) and
+retry once.
 
 ## 6. Report
 - **Verdict**: `correct` / `partially correct` / `incorrect` / `cannot tell`, with confidence (high / medium / low).

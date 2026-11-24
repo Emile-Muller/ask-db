@@ -17,8 +17,9 @@ You only PROPOSE SQL. Deterministic code decides whether it runs: the validator
 - The ONLY way to query the database is `python -m text2sql`. Never run SQL by any
   other means: no `duckdb` CLI, no `python -c` / scripts that open `data/olist.duckdb`,
   no reading the database file.
-- Never edit anything under `src/text2sql/`, `data/` or `tests/` during a /question run,
-  even if a layer refuses something you think is fine. Report the refusal instead.
+- Never edit anything under `src/text2sql/`, `data/`, `tests/` or this skill's folder
+  during a /question run, even if a layer refuses something you think is fine. Report
+  the refusal instead.
 - Never retry a refused query by rewording it to get around a guardrail. One proposal
   per question. (If DuckDB reports a plain SQL error such as a wrong type, you may fix
   that once.)
@@ -63,13 +64,24 @@ Then call the pipeline with it:
 The trace is printed as JSON and appended to `questions/logs/questions/<date>.jsonl`.
 Exit codes: 0 accepted, 2 refused, 1 internal error.
 
-## 4. Report
-From the trace, show:
-- **Verdict**: `accepted` / `refused` / `error`, and **decided by**: `refused_by`
-  (layer name and number), with `reason`.
-- **SQL**: `generated_sql` (what you proposed) and `normalized_sql` (what actually ran,
-  e.g. with the forced LIMIT), in ```sql blocks.
-- **Result**: `result.columns` and `result.rows` as a small table, with
-  "showing N of row_count rows" when `truncated` is true.
-- One line per stage: `L<layer> <name>: <status>`.
-- Any assumption you made (e.g. which date column you used).
+## 4. Build and validate the report
+Produce JSON matching `schema.json` (in this skill's folder); see `example.json`. Copy
+every value from the trace as the schema's descriptions say; only `assumptions` is yours.
+
+    .venv/Scripts/python.exe .claude/skills/question/scripts/validate.py <<'EOF'
+    <the report JSON>
+    EOF
+
+Exit 2 lists what is wrong: fix the report (never the schema) and validate again.
+
+## 5. Answer
+Write the answer from the validated report only (do not print the JSON itself):
+- **Answer**: one sentence answering `input` from `result`, or saying why it was not answered.
+- **Verdict**: `verdict`; if refused or error, the layer (`decided_by` and its number) and `reason`.
+- **Result**: `result` as a Markdown table; if it has fewer rows than `row_count`, add
+  "showing N of `row_count` rows".
+- **SQL**: `sql.proposed` and `sql.executed`, each in a fenced code block tagged `sql`
+  (skip the null ones).
+- **Stages**: one line, `L1 input_screen: pass · L2 generation: pass · ...`.
+- **Assumptions**: `assumptions` as a list (skip if empty).
+- **Trace**: `trace_id`.

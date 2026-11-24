@@ -22,7 +22,16 @@ from typing import Any, NoReturn
 
 from text2sql import config, executor, output_check, prompt, review_log
 from text2sql.input_screen import NATURAL_LANGUAGE, RAW_SQL, screen
-from text2sql.trace import FAIL, PASS, SKIPPED, TraceBuilder, append, check_log_path, dumps
+from text2sql.trace import (
+    FAIL,
+    PASS,
+    SKIPPED,
+    TraceBuilder,
+    TraceError,
+    append,
+    check_log_path,
+    dumps,
+)
 from text2sql.validator import validate
 
 EXIT_ACCEPTED, EXIT_ERROR, EXIT_REFUSED = 0, 1, 2
@@ -118,11 +127,15 @@ def run_pipeline(
 
 
 def _emit(trace: dict[str, Any], trace_file: Path | None) -> int:
-    print(dumps(trace))
+    """Log the trace, then print it. A trace that fails its schema is neither (exit 1)."""
     try:
         append(trace, trace_file)
+    except TraceError as e:
+        print(f"python -m text2sql: trace rejected, not logged: {e}", file=sys.stderr)
+        return EXIT_ERROR
     except (OSError, ValueError) as e:
         print(f"warning: could not append trace: {e}", file=sys.stderr)
+    print(dumps(trace))
     return {"accepted": EXIT_ACCEPTED, "refused": EXIT_REFUSED}.get(trace["verdict"], EXIT_ERROR)
 
 

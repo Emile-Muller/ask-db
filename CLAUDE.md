@@ -24,7 +24,9 @@ check) are defense in depth.
 | 5 | `output_check.py` | drop restricted columns, mask emails/phones, 20-row preview |
 
 Limits and paths live in `config.py`; allowed tables and restricted (`sensitive: true`)
-columns in `data/schema.yaml`. The trace format is documented in `trace.py`.
+columns in `data/schema.yaml`. The trace format is documented in `trace.py`; its contract is
+`src/text2sql/schemas/question_trace.json` plus `trace.cross_checks`, checked by `trace.append`
+before a trace is logged or printed (a trace that fails is neither, exit 1).
 
 ## CLI contract (`python -m text2sql`, venv: `.\.venv\Scripts\python.exe`)
 - `context --question "..."`: layer 1; if it passes, print the layer-2 prompt, else the refusal trace
@@ -32,7 +34,9 @@ columns in `data/schema.yaml`. The trace format is documented in `trace.py`.
 - `run --question "..." --refusal "..."`: the proposer declined (refused by `generation`)
 - `run --sql "..."`: raw-SQL path (input_type `raw_sql`): layers 1, 3, 4, 5
 - `check --sql "..."`: layer 3 only, no database
-- `review` (review JSON on stdin): logs a `/question-review` judgement to
+- `review` (review JSON on stdin): checks it against `src/text2sql/schemas/question_review.json`
+  (the single source of the review contract; its limits mirror `config.REVIEW_MAX_*`,
+  kept equal by a test) and logs a `/question-review` judgement to
   `questions/logs/question-reviews/<YYYYMMDD>.jsonl` (`review_log.py`); no database. The
   question-reviewer agent may run only this command, enforced by its `PreToolUse` hook
   (`review_guard.py`)
@@ -66,5 +70,7 @@ columns in `data/schema.yaml`. The trace format is documented in `trace.py`.
 ### 5. The allowlist and red-team corpus are frozen for sessions
 `.claude/settings.json` denies `Edit(./tests/redteam_corpus.yaml)` and
 `Edit(./data/schema.yaml)`, so a `/question` run can never change the allowlist or the
-red-team cases that judge it. To change them, a human removes those rules temporarily, makes
+red-team cases that judge it. It also denies `Edit(./.claude/skills/question/**)` and
+`Edit(./src/text2sql/schemas/**)`, so a session cannot loosen the trace, report or review
+contract it is checked against. To change them, a human removes those rules temporarily, makes
 the change, and puts them back.

@@ -237,6 +237,77 @@ def test_guard_hook_fails_closed():
     assert p.returncode == 2 and "blocked" in p.stderr
 
 
+# In-process runs of main(), so the hook entry point itself is covered.
+
+
+def _main(monkeypatch, stdin: str) -> int:
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    return review_guard.main()
+
+
+@pytest.mark.parametrize(
+    ("event", "decision", "reason"),
+    [
+        ({"tool_name": "Bash", "tool_input": {"command": GOOD}}, "allow", "review log command"),
+        ({"tool_name": "Bash", "tool_input": {"command": "ls"}}, "deny", "the only command"),
+        ({"tool_name": "Read", "tool_input": {"file_path": "x"}}, "deny", "may not use Read"),
+        ({"tool_name": "Bash", "tool_input": {}}, "deny", "no command given"),
+        ({"tool_name": "Bash"}, "deny", "no command given"),
+        ({"tool_input": {"command": GOOD}}, "deny", "may not use"),
+        ({"tool_name": "Bash", "tool_input": {"command": 42}}, "deny", "no command given"),
+    ],
+)
+def test_guard_main_decision(monkeypatch, capsys, event, decision, reason):
+    assert _main(monkeypatch, json.dumps(event)) == 0
+    out = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse"
+    assert out["permissionDecision"] == decision
+    assert out["permissionDecisionReason"].startswith("review_guard: ")
+    assert reason in out["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    "stdin",
+    [
+        "",  # empty input
+        "not json",
+        "[]",  # not an object: no .get
+        '"Bash"',
+        json.dumps({"tool_name": "Bash", "tool_input": ["ls"]}),  # tool_input not an object
+        json.dumps({"tool_name": ["Bash"], "tool_input": {"command": GOOD}}),  # unhashable
+    ],
+)
+def test_guard_main_fails_closed(monkeypatch, capsys, stdin):
+    assert _main(monkeypatch, stdin) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""  # no decision printed, so nothing can read as "allow"
+    assert "review_guard: blocked" in captured.err
+
+
+def test_guard_main_fails_closed_on_internal_error(monkeypatch, capsys):
+    def boom(*_args):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(review_guard, "decide", boom)
+    event = {"tool_name": "Bash", "tool_input": {"command": GOOD}}
+    assert _main(monkeypatch, json.dumps(event)) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and "RuntimeError" in captured.err
+
+
+# runpy warns because the module is already imported above; harmless here.
+@pytest.mark.filterwarnings("ignore:'text2sql.review_guard' found in sys.modules:RuntimeWarning")
+def test_guard_module_entry_point(monkeypatch, capsys):
+    import runpy
+
+    event = {"tool_name": "Bash", "tool_input": {"command": GOOD}}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_module("text2sql.review_guard", run_name="__main__")
+    assert exc.value.code == 0
+    assert '"allow"' in capsys.readouterr().out
+
+
 def _agent_hook_command() -> str:
     text = (config.PROJECT_ROOT / ".claude" / "agents" / "question-reviewer.md").read_text(
         encoding="utf-8"
