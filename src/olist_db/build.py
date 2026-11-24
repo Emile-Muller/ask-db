@@ -17,6 +17,25 @@ from text2sql.config import DATA_DIR, DB_PATH
 
 RAW_DIR = DATA_DIR / "raw"  # Kaggle CSVs (not tracked, see data/README.md)
 
+# Column names misspelled in the Kaggle CSVs, renamed at load time: {table: {raw: fixed}}.
+# The CSVs stay as downloaded; a header that is already fixed is left alone.
+COLUMN_RENAMES: dict[str, dict[str, str]] = {
+    "olist_products_dataset": {
+        "product_name_lenght": "product_name_length",
+        "product_description_lenght": "product_description_length",
+    },
+}
+
+
+def _fix_column_names(con: duckdb.DuckDBPyConnection, table: str) -> None:
+    """Rename the known misspelled columns of ``table`` that are present."""
+    renames = COLUMN_RENAMES.get(table, {})
+    columns = {row[0] for row in con.execute(f'DESCRIBE "{table}"').fetchall()}
+    for old, new in renames.items():
+        if old in columns:
+            con.execute(f'ALTER TABLE "{table}" RENAME COLUMN "{old}" TO "{new}"')
+            print(f"{table}: renamed column {old} -> {new}")
+
 
 def build(raw_dir: Path = RAW_DIR, db_path: Path = DB_PATH) -> dict[str, int]:
     """Load every CSV in ``raw_dir`` into ``db_path``. Returns {table: row count}."""
@@ -32,6 +51,7 @@ def build(raw_dir: Path = RAW_DIR, db_path: Path = DB_PATH) -> dict[str, int]:
                 f'CREATE OR REPLACE TABLE "{table}" AS SELECT * FROM read_csv_auto(?)',
                 [str(csv)],
             )
+            _fix_column_names(con, table)
             counts[table] = con.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
             print(f"{table}: {counts[table]:,} rows")
 

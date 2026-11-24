@@ -28,7 +28,9 @@ After a purchase, the seller is notified to fulfill the order. Once the customer
 ## Files
 
 Download the CSVs from Kaggle into `data/raw/` (not tracked by git), then run
-`python -m olist_db.build` to build `data/olist.duckdb`. Table and column
+`python -m olist_db.build` to build `data/olist.duckdb`. Use the files as downloaded: the
+build renames the misspelled `product_name_lenght` / `product_description_lenght` columns
+of `olist_products_dataset.csv` to `*_length`. Table and column
 descriptions used in the prompt live in `data/schema.yaml`.
 
 | File | Description | Key columns |

@@ -157,13 +157,13 @@ python -m venv .venv
 CSV files live in `data/raw/` (not tracked; download them from Kaggle). See
 [data/README.md](data/README.md) for source, license and table descriptions.
 
-> **Note:** the original `olist_products_dataset.csv` misspells two columns (`product_name_lenght`, `product_description_lenght`). The header has been fixed locally to `product_name_length` and `product_description_length`. If you re-download the dataset, fix the header again before building the database.
+> **Note:** the original `olist_products_dataset.csv` misspells two columns (`product_name_lenght`, `product_description_lenght`). You don't need to edit the file: the database build renames them to `product_name_length` and `product_description_length` (see `COLUMN_RENAMES` in `src/olist_db/build.py`). The CSVs stay exactly as downloaded, and a header that is already correct is left alone.
 
 ### Database
 
 `src/olist_db/build.py` loads every CSV in `data/raw/` into `data/olist.duckdb`, one table per
-file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`).
-Re-run it whenever the CSVs change. It is the only code that opens the database for writing,
+file, named after the file (e.g. `olist_products_dataset.csv` → table `olist_products_dataset`),
+and fixes the known misspelled column names as it loads them. Re-run it whenever the CSVs change. It is the only code that opens the database for writing,
 and it runs fixed SQL only; everything else goes through the read-only, locked-down connection
 in `src/text2sql/executor.py`.
 
@@ -214,6 +214,11 @@ tests/           offline tests: one file per layer, CLI, review log, JSON contra
 In Claude Code, run `/release [major|minor|patch]` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, recommends a bump type from the changes and asks you to confirm or change it, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.6.1 — 2026-11-24
+- DB build renames the misspelled Kaggle columns `product_name_lenght` / `product_description_lenght` of `olist_products_dataset` to `*_length` at load time (`COLUMN_RENAMES`), only when still misspelled
+- Docs: `README.md` and `data/README.md` now say to use the CSVs as downloaded, no manual header fix
+- Tests: parametrized build test covering both the misspelled and the already-correct header
 
 ### 1.6.0 — 2026-11-24
 - Input screen: new strong injection checks `authority_claim` ("I'm the admin", "grant me write access", `sudo`) and `destructive_command` ("delete all tables", "wipe the database", natural language only)
