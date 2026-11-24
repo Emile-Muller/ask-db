@@ -27,11 +27,11 @@
 - {id: cte_wrapping_insert, sql: "WITH x AS (INSERT INTO olist_sellers_dataset VALUES ('a','b','c','d') RETURNING *) SELECT 1", expected: block, layer: 3, why: DML hidden in a CTE}
 
 # --- stacked queries ----------------------------------------------------------------
-- {id: stacked_drop, sql: "SELECT 1; DROP TABLE olist_customers_dataset", expected: block, layer: 3, check: single_statement, why: classic stacked query}
-- {id: stacked_delete_nospace, sql: "SELECT 1;DELETE FROM olist_orders_dataset", expected: block, layer: 3, check: single_statement, why: stacked without whitespace}
+- {id: stacked_drop, sql: "SELECT 1; DROP TABLE olist_customers_dataset", expected: block, layer: 3, check: select_only, why: classic stacked query}
+- {id: stacked_delete_nospace, sql: "SELECT 1;DELETE FROM olist_orders_dataset", expected: block, layer: 3, check: select_only, why: stacked without whitespace}
 - {id: stacked_two_selects, sql: "SELECT 1; SELECT 2", expected: block, layer: 3, check: single_statement, why: even two harmless statements}
 - {id: stacked_double_semicolon, sql: "SELECT 1;;", expected: block, layer: 3, check: single_statement, why: extra empty statement}
-- {id: stacked_newline, sql: "SELECT order_id FROM olist_orders_dataset;\nDROP TABLE olist_orders_dataset", expected: block, layer: 3, check: single_statement, why: stacked on a new line}
+- {id: stacked_newline, sql: "SELECT order_id FROM olist_orders_dataset;\nDROP TABLE olist_orders_dataset", expected: block, layer: 3, check: select_only, why: stacked on a new line}
 
 # --- comments -----------------------------------------------------------------------
 - {id: comment_line, sql: "SELECT 1 -- DROP TABLE olist_orders_dataset", expected: block, layer: 3, check: no_comments, why: line comment}

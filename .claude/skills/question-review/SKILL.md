@@ -14,7 +14,10 @@ Input: `$ARGUMENTS`
 ## 1. Find the trace
 Traces are JSON lines in `questions/logs/questions/<YYYYMMDD>.jsonl`, one object per run.
 - With a trace id: Grep for `"id": "<id>"` in `questions/logs/questions/`. If nothing matches, say so and stop (log nothing).
-- Without one: take the last line of the newest file in `questions/logs/questions/`.
+- Without one: Glob `questions/logs/questions/*.jsonl` (newest first) and take the first
+  file. Grep it for `"id": "[0-9a-f]{32}"` with `-o`; the last match gives the line number
+  and id of the latest run. Read that file with `offset` = that line, `limit` = 1.
+  Do not use the shell for this: the only command you may run is the review writer.
 
 Then read `data/schema.yaml`.
 

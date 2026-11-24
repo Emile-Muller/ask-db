@@ -85,9 +85,31 @@ def test_checks_are_reported_in_order():
 
 def test_checks_stop_at_first_failure():
     result = validate("SELECT 1; DROP TABLE olist_orders_dataset")
-    assert [c.name for c in result.checks] == ["parse", "single_statement"]
+    assert [c.name for c in result.checks] == ["parse", "select_only"]
     assert [c.passed for c in result.checks] == [True, False]
-    assert result.to_dict()["checks"][-1]["name"] == "single_statement"
+    assert result.to_dict()["checks"][-1]["name"] == "select_only"
+
+
+@pytest.mark.parametrize(
+    "sql, check, detail",
+    [
+        # A stacked write is refused for the write, before the statement count.
+        ("SELECT 1; DROP TABLE x", "select_only", "got DROP (statement 2 of 2)"),
+        ("SELECT 1;DELETE FROM olist_orders_dataset", "select_only", "got DELETE (statement 2"),
+        ("SELECT 1; SELECT * INTO t FROM x", "no_forbidden_nodes", "INTO (statement 2 of 2)"),
+        # A comment after ';' becomes a comment-only Semicolon node; look past it.
+        ("SELECT 1;/**/dRoP/**/TaBlE/**/x", "select_only", "got DROP (statement 2 of 2)"),
+        ("SELECT 1; /* x */ DELETE FROM x", "select_only", "got DELETE (statement 2 of 2)"),
+        ("SELECT 1 /* a */; DELETE FROM x -- b", "select_only", "got DELETE (statement 2 of 2)"),
+        ("SELECT 1; /* x */", "single_statement", "found 2"),
+        # Harmless stacked statements still fail the statement count.
+        ("SELECT 1; SELECT 2", "single_statement", "found 2"),
+    ],
+)
+def test_stacked_statements_report_the_write_first(sql, check, detail):
+    result = validate(sql)
+    assert not result.ok and result.failed_check == check
+    assert detail in result.reason
 
 
 @pytest.mark.parametrize("value", [None, 42, "   ", "\n\t"])

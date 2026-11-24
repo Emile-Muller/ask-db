@@ -26,18 +26,35 @@ RAW_SQL = "raw_sql"
 _STRIP_CATEGORIES = {"Cc", "Cf", "Cs", "Co"}
 
 # --- classification -----------------------------------------------------------------
-_SQL_START = re.compile(
-    r"^\(*\s*(select|with|insert|update|delete|drop|alter|create|pragma|attach|copy)\b", re.I
-)
-# A second SQL signal after the leading keyword, so that English such as
+# Misclassifying either way is safe (the validator judges every SQL text on both paths),
+# but it changes which layer explains the refusal, so the shapes below aim to be precise.
+_QUERY_START = re.compile(r"^\(*\s*(select|with)\b", re.I)
+# A second SQL signal after SELECT / WITH, so that English such as
 # "Select the top 5 sellers" or "With which payment type ..." stays natural language.
 _SQL_BODY = re.compile(
     r"^\s*\d|[*()='\"]|\b(from|where|table|into|set|values|join|group\s+by|order\s+by|limit|"
     r"as|database|extension|returning)\b",
     re.I,
 )
-_SQL_KEYWORD = re.compile(
-    r"\b(select|insert|update|delete|drop|alter|create|pragma|attach|copy|from|table)\b", re.I
+# Apostrophes inside English contractions ("don't", "seller's") are not string quotes.
+_CONTRACTION = re.compile(r"(?<=[a-z])'(?=[a-z])", re.I)
+# Other statements must start with their real SQL shape: "DROP TABLE x" is SQL, while
+# "Drop the reviews table, ..." is English (and is judged by the injection heuristics).
+_OBJECT = r"(?:table|view|schema|database|index|sequence|macro|function|type|secret)\b"
+_ENGLISH_DETERMINER = r"(?:the|a|an|all|any|every|each|my|our|your|this|that|these|those)\b"
+_STATEMENT_START = re.compile(
+    r"^\(*\s*(?:"
+    rf"drop\s+(?:temp(?:orary)?\s+)?{_OBJECT}|"
+    rf"create\s+(?:or\s+replace\s+)?(?:(?:temp|temporary|persistent|unique)\s+)?{_OBJECT}|"
+    rf"alter\s+{_OBJECT}|"
+    r"insert\s+(?:or\s+(?:replace|ignore)\s+)?into\b|"
+    r"delete\s+from\b|"
+    rf"update\s+(?!{_ENGLISH_DETERMINER})[\w.\"]+\s+set\b|"
+    r"pragma\s+\w+|"
+    r"attach\s+(?:database\s+)?(?:if\s+not\s+exists\s+)?['\"]|"
+    rf"copy\s+(?:\(|(?!{_ENGLISH_DETERMINER})[\w.\"]+\s+(?:to|from)\b)"
+    r")",
+    re.I,
 )
 
 # --- prompt-injection heuristics ----------------------------------------------------
@@ -71,6 +88,34 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], bool], ...] = tuple(
             r"\bnew\s+(instructions?|rules|task|role)\b|"
             r"\b(admin|administrator|developer|system|root)\s+"
             r"(override|command|instructions?|message|note|access)\b",
+            True,
+        ),
+        (
+            # Claims of authority or requests for more of it ("I'm the admin", "grant me
+            # write access"). A user's claimed role never changes what the pipeline allows.
+            "authority_claim",
+            r"\b(?:i\s*['’]?\s*a?m|i\s+am)\s+(?:now\s+|really\s+|actually\s+)?"
+            r"(?:the\s+|an?\s+|your\s+)?(?:system\s+|database\s+|db\s+|site\s+|super\s*)?"
+            r"(?:admin|administrator|sysadmin|dba|root|superuser|super\s+user|developer)\b|"
+            r"\bas\s+(?:the|an?|your)\s+(?:system\s+|database\s+|db\s+)?"
+            r"(?:admin|administrator|sysadmin|dba|root|superuser)\b|"
+            r"\bi\s+(?:have|got|own)\s+(?:full\s+)?(?:admin|administrator|root|superuser|write|"
+            r"full|elevated|special)\s+(?:access|rights|privileges?|permissions?|clearance)\b|"
+            r"\b(?:i\s*['’]?\s*a?m|i\s+am)\s+(?:authori[sz]ed|allowed|permitted|cleared)\s+to\b|"
+            r"\b(?:grant|give)\s+(?:me|us)\b(?:\W+\w+){0,2}?\W+"
+            r"(?:access|rights|privileges?|permissions?)\b|"
+            r"\b(?:elevate|escalate)\b(?:\W+\w+){0,3}?\W+(?:privileges?|permissions?|rights)\b|"
+            r"\bsudo\b",
+            True,
+        ),
+        (
+            # Destructive commands written in plain English ("delete all tables", "wipe the
+            # database"). SQL keywords are still matched by the weaker write_intent below.
+            "destructive_command",
+            r"\b(?:delete|drop|remove|erase|wipe|truncate|destroy|purge|nuke|trash)\b"
+            r"(?:\W+\w+){0,3}?\W+(?:tables?|databases?|db|schemas?|views?|indexes|everything|"
+            r"all\s+(?:the\s+|of\s+the\s+)?(?:data|rows|records|entries))\b|"
+            r"\b(?:wipe|erase|purge|destroy|nuke)\b(?:\W+\w+){0,2}?\W+(?:out|clean|data)\b",
             True,
         ),
         (
@@ -125,18 +170,34 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _looks_like_statement(segment: str) -> bool:
+    segment = segment.strip()
+    if start := _QUERY_START.match(segment):
+        return bool(_SQL_BODY.search(_CONTRACTION.sub("", segment[start.end() :])))
+    return bool(_STATEMENT_START.match(segment))
+
+
 def classify(text: str) -> str:
-    if (start := _SQL_START.match(text)) and _SQL_BODY.search(text[start.end() :]):
-        return RAW_SQL
-    if ";" in text and _SQL_KEYWORD.search(text):
+    """RAW_SQL if the text, or any ``;``-separated part of it, starts like a SQL statement."""
+    if any(_looks_like_statement(segment) for segment in text.split(";")):
         return RAW_SQL
     return NATURAL_LANGUAGE
 
 
-def detect_injection(text: str) -> tuple[list[str], list[str]]:
+# Patterns aimed at plain English only. On raw SQL, write statements are left to the
+# validator (layer 3), which refuses them with a precise check name.
+_NATURAL_LANGUAGE_ONLY = frozenset({"destructive_command"})
+
+
+def detect_injection(text: str, input_type: str = NATURAL_LANGUAGE) -> tuple[list[str], list[str]]:
     """Return (strong flags, weak flags) matched in ``text``."""
-    strong = [name for name, rx, is_strong in _PATTERNS if is_strong and rx.search(text)]
-    weak = [name for name, rx, is_strong in _PATTERNS if not is_strong and rx.search(text)]
+    active = [
+        (name, rx, is_strong)
+        for name, rx, is_strong in _PATTERNS
+        if input_type == NATURAL_LANGUAGE or name not in _NATURAL_LANGUAGE_ONLY
+    ]
+    strong = [name for name, rx, is_strong in active if is_strong and rx.search(text)]
+    weak = [name for name, rx, is_strong in active if not is_strong and rx.search(text)]
     return strong, weak
 
 
@@ -144,7 +205,7 @@ def screen(text: str, max_chars: int = config.MAX_INPUT_CHARS) -> ScreenResult:
     raw = text if isinstance(text, str) else ""
     normalized = normalize(raw)
     input_type = classify(normalized)
-    strong, weak = detect_injection(normalized)
+    strong, weak = detect_injection(normalized, input_type)
     flags = strong + weak
     result = ScreenResult(True, normalized, input_type, flags, None, len(raw))
     if not normalized:

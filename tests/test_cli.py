@@ -128,7 +128,8 @@ def test_refused_by_validator_stacked_query(run):
     code, t = run("run", "--sql", "SELECT 1; DROP TABLE customers")
     assert code == 2 and t["verdict"] == "refused" and t["refused_by"] == "validator"
     checks = t["stages"][2]["details"]["checks"]
-    assert checks[-1]["name"] == "single_statement" and not checks[-1]["passed"]
+    assert checks[-1]["name"] == "select_only" and not checks[-1]["passed"]
+    assert "DROP" in checks[-1]["detail"]
     assert t["normalized_sql"] is None
 
 

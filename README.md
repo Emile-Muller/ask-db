@@ -211,9 +211,17 @@ tests/           offline tests: one file per layer, CLI, review log, JSON contra
 
 ## Releasing
 
-In Claude Code, run `/release major|minor|patch` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
+In Claude Code, run `/release [major|minor|patch]` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, recommends a bump type from the changes and asks you to confirm or change it, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.6.0 — 2026-11-24
+- Input screen: new strong injection checks `authority_claim` ("I'm the admin", "grant me write access", `sudo`) and `destructive_command` ("delete all tables", "wipe the database", natural language only)
+- Input screen: raw-SQL detection now needs a real statement shape on each `;`-separated part, so English like "Drop the reviews table, ..." stays natural language
+- Validator: `select_only` and `no_forbidden_nodes` now inspect every statement before `single_statement`, so a stacked write (`SELECT 1; DROP TABLE x`) is refused for the write, with its statement position; comment-only `;` parts are looked past
+- Review contract: `injection_attempt` description clarified (manipulating any pipeline LLM counts; a plain forbidden request does not); `question-reviewer` agent and `/question-review` skill updated to match and to find the latest trace with Glob/Grep/Read only
+- `/release` now always recommends a bump type from the changes and asks the user to confirm it; `version-manager` gains a bump classification table and a structured proposal mode
+- Tests: new classification, injection and benign look-alike cases, stacked-statement validator cases; red-team stacked cases now expect `select_only`
 
 ### 1.5.0 — 2026-11-24
 - New `src/text2sql/json_contract.py`: a JSON Schema subset checker (standard library only) that lints the whole schema first and rejects keywords it does not implement

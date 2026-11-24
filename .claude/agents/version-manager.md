@@ -17,8 +17,30 @@ Read-only git commands (`git log`, `git diff`, `git status`, `git tag -l`, `git 
 ## Bump rules
 - **major**: breaking changes · **minor**: new features, backward compatible · **patch**: bug fixes.
 - Reset the lower parts to 0 on bump.
-- If no bump type is given, look at the changes since the last tag (see "What changed") and
-  **propose** a type with a one-line reason. Do not apply it; return the proposal to the caller.
+
+The project's public interface is the `python -m text2sql` CLI contract (commands, flags, exit codes,
+stdout), the trace and review contracts (`src/text2sql/schemas/*.json`, `trace.cross_checks`), the log
+paths under `questions/logs/`, the `olist_db.build` entry point, and the `/question` and
+`/question-review` skills. Classify against it:
+
+| Bump | When the release contains at least one... |
+|---|---|
+| `major` | removed/renamed CLI command or flag, changed exit-code meaning, trace/review JSON change that rejects or reinterprets previously valid documents (removed/renamed/newly required field, narrower enum or type), moved log paths, removed skill or agent |
+| `minor` | new CLI command or flag, new optional trace/review field, new allowed query shape/function/table, new guardrail check or layer feature, new skill or agent, new user-visible behavior that stays backward compatible |
+| `patch` | bug fix, closed guardrail bypass (a stricter check that only refuses what was already meant to be refused), docs, tests/red-team cases, refactor, perf, dependencies, CI, tooling, `.claude/` config tweaks |
+
+Take the highest bump any change requires. When a change is borderline, say so in the reason.
+
+## Proposal mode
+When asked to **propose** (no bump type given, or the caller asks for a recommendation), do not edit
+anything. Look at the changes since the last tag (see "What changed") and return:
+- `current`: the current version, and the latest `v*` tag.
+- `recommended`: `major`, `minor` or `patch`, with a one-line reason.
+- `drivers`: the 1-5 changes that decide it (file or commit + what it changes), each tagged with the
+  bump it requires on its own.
+- `candidates`: the resulting version for each of `major`, `minor`, `patch` (e.g. `2.0.0 / 1.6.0 / 1.5.1`),
+  each already checked against "validate the new version" below (flag any that fails).
+- `alternative` (optional): the other bump type a reasonable maintainer might pick, and why.
 
 ## What changed
 The release contains both the commits since the last tag **and** the uncommitted work:

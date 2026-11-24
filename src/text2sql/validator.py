@@ -7,10 +7,14 @@ treats every SQL string as hostile and fails closed (any unexpected error = reje
 Checks run in order and stop at the first failure:
 
 1. parse               - SQL is a non-empty string that sqlglot can parse
-2. single_statement    - exactly one statement (a single trailing ``;`` is tolerated)
-3. no_comments         - no ``--`` or ``/* */`` comments anywhere (rejected, not stripped)
-4. select_only         - root is SELECT / UNION / INTERSECT / EXCEPT (CTEs allowed)
-5. no_forbidden_nodes  - no DML, DDL, command, PRAGMA, SET, ATTACH, COPY, ... anywhere
+2. select_only         - every statement's root is SELECT / UNION / INTERSECT / EXCEPT
+                         (CTEs allowed)
+3. no_forbidden_nodes  - no DML, DDL, command, PRAGMA, SET, ATTACH, COPY, ... in any statement
+4. single_statement    - exactly one statement (a single trailing ``;`` is tolerated)
+5. no_comments         - no ``--`` or ``/* */`` comments anywhere (rejected, not stripped)
+
+Checks 2 and 3 look at every parsed statement before check 4 counts them, so a stacked
+write (``SELECT 1; DROP TABLE x``) is refused for the write itself, the more severe reason.
 6. function_allowlist  - every function call is on an explicit allowlist
 7. table_allowlist     - only policy tables or CTEs defined in the query; no schemas
 8. column_allowlist    - every column resolves to an allowed, non-restricted column
@@ -161,20 +165,49 @@ def _check_no_comments(s: _State) -> str:
 
 
 def _check_select_only(s: _State) -> str:
-    root = s.statements[0]
-    while isinstance(root, exp.Subquery):  # "(SELECT ...)" -> "SELECT ..."
-        root = root.this
-    if not isinstance(root, (exp.Select, exp.SetOperation)):
-        raise _Reject(f"only SELECT queries are allowed, got {type(root).__name__.upper()}")
-    s.tree = root
-    return type(root).__name__.upper()
+    # Every statement, not just the first: a stacked write is reported as a write.
+    statements = _real_statements(s.statements)
+    if not statements:
+        raise _Reject("no statement found")
+    roots: list[exp.Expression] = []
+    for i, statement in enumerate(statements, start=1):
+        root = statement
+        while isinstance(root, exp.Subquery):  # "(SELECT ...)" -> "SELECT ..."
+            root = root.this
+        if not isinstance(root, (exp.Select, exp.SetOperation)):
+            raise _Reject(
+                f"only SELECT queries are allowed, got {type(root).__name__.upper()}"
+                + _position(i, len(statements))
+            )
+        roots.append(root)
+    s.tree = roots[0]
+    return type(s.tree).__name__.upper()
 
 
 def _check_no_forbidden_nodes(s: _State) -> str:
-    for node in s.tree.walk():
-        if isinstance(node, FORBIDDEN_NODES):
-            raise _Reject(f"forbidden construct {type(node).__name__.upper()}")
+    statements = _real_statements(s.statements)
+    for i, statement in enumerate(statements, start=1):
+        for node in statement.walk():
+            if isinstance(node, FORBIDDEN_NODES):
+                raise _Reject(
+                    f"forbidden construct {type(node).__name__.upper()}"
+                    + _position(i, len(statements))
+                )
     return "none"
+
+
+def _real_statements(statements: list[exp.Expression]) -> list[exp.Expression]:
+    """Statements without sqlglot's comment-only ``Semicolon`` nodes.
+
+    ``SELECT 1;/**/DROP TABLE x`` parses as SELECT, Semicolon (the comment), DROP. The
+    Semicolon node is not a statement, so the write check must look past it. It still
+    counts for ``single_statement``, and ``no_comments`` rejects its comment.
+    """
+    return [st for st in statements if not isinstance(st, exp.Semicolon)]
+
+
+def _position(index: int, total: int) -> str:
+    return f" (statement {index} of {total})" if total > 1 else ""
 
 
 def _check_function_allowlist(s: _State) -> str:
@@ -275,10 +308,10 @@ def _check_limit(s: _State) -> str:
 
 CHECKS: tuple[tuple[str, Callable[[_State], str]], ...] = (
     ("parse", _check_parse),
-    ("single_statement", _check_single_statement),
-    ("no_comments", _check_no_comments),
     ("select_only", _check_select_only),
     ("no_forbidden_nodes", _check_no_forbidden_nodes),
+    ("single_statement", _check_single_statement),
+    ("no_comments", _check_no_comments),
     ("function_allowlist", _check_function_allowlist),
     ("table_allowlist", _check_table_allowlist),
     ("column_allowlist", _check_column_allowlist),

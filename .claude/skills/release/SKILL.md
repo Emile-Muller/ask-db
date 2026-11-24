@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a release in a single commit - run all tests, stage all changes, update VERSION and the README version history, commit once with a Conventional Commits message (feat/fix/docs/... picked from the changes) and create the annotated vX.Y.Z tag. Use when the user asks to release or cut a version.
+description: Cut a release in a single commit - run all tests, recommend a bump type (major/minor/patch) from the changes and let the user confirm or change it, stage all changes, update VERSION and the README version history, commit once with a Conventional Commits message (feat/fix/docs/... picked from the changes) and create the annotated vX.Y.Z tag. Use when the user asks to release or cut a version.
 argument-hint: "[major|minor|patch]"
 disable-model-invocation: true
 ---
@@ -13,8 +13,9 @@ The whole release is **one commit**: pending work + `VERSION` + README version h
 Run the steps in order. If a step fails, **stop** and report it: no commit, no tag. Never push unless asked.
 
 ## 0. Parse the argument
-- Allowed: `major`, `minor`, `patch` (case-insensitive).
-- Empty: ask the `version-manager` subagent to propose a bump type, then confirm it with the user.
+- Allowed: `major`, `minor`, `patch` (case-insensitive), or empty.
+- The argument is only the user's **initial request**: step 3 always recommends a type from the changes
+  and lets the user confirm or change it.
 - Anything else: stop and list the allowed values.
 
 ## 1. Pre-flight
@@ -34,8 +35,33 @@ Run the steps in order. If a step fails, **stop** and report it: no commit, no t
   - No hardcoded secrets (grep for `api_key\s*=\s*["']`, `sk-`, `token\s*=\s*["']`, `password\s*=\s*["']`).
   - `.env` and `.streamlit/secrets.toml` are in `.gitignore`.
 
-## 3. Update VERSION and README (version-manager subagent)
-Call the `version-manager` subagent (Agent tool, `subagent_type: "version-manager"`) with the bump type.
+## 3. Choose the bump type (ask the user)
+Done after the tests pass, so the user is never asked about a release that cannot happen.
+
+1. Call the `version-manager` subagent (Agent tool, `subagent_type: "version-manager"`) in **proposal
+   mode**: it edits nothing and returns the current version, a `recommended` type with its reason, the
+   `drivers`, the `candidates` versions and an optional `alternative`.
+2. Sanity-check the recommendation yourself against the changes listed in step 1 (e.g. a new CLI flag
+   is at least `minor`, a trace/review contract change that rejects old documents is `major`). If you
+   disagree, recommend your type instead and say why.
+3. Ask the user with **AskUserQuestion** (one question, header `Bump type`, single select), always,
+   even if `$ARGUMENTS` named a type:
+   - Question: `Release <current> as which type? Recommended: <type> (<one-line reason>).`
+     If `$ARGUMENTS` differs from the recommendation, add `You asked for <type>.`
+   - Exactly three options, the recommended one **first** with ` (Recommended)` appended to its label;
+     the other two follow in the order `major`, `minor`, `patch`. Label: `<type> → <new version>`.
+     Description: what that bump means here, citing the driver(s) that justify or argue against it
+     (e.g. `New --format flag on run is backward compatible`). Mark the requested type with
+     `(requested)` in its description.
+   - Before asking, print a short summary of the drivers so the user sees why.
+4. The user's answer is the bump type for the rest of the workflow. If they choose `Other` with free
+   text, accept only `major`/`minor`/`patch` or an explicit `X.Y.Z` (passed to the subagent as "set");
+   otherwise ask again. If they choose a type lower than the drivers require (e.g. `patch` with a
+   breaking change), warn once and ask them to confirm.
+
+## 4. Update VERSION and README (version-manager subagent)
+Call the `version-manager` subagent (Agent tool, `subagent_type: "version-manager"`) with the bump type
+confirmed in step 3.
 It validates the new version (SemVer, greater than the latest tag, tag not taken), updates `VERSION`,
 and writes the `## Version history` entry from the commits since the last tag **and** the uncommitted changes.
 It does not stage, commit or tag.
@@ -44,14 +70,14 @@ Check its result: `VERSION` holds the new version and README has the new entry a
 If other docs (`README.md` usage/setup, `CLAUDE.md`, `data/README.md`) no longer match the code, fix them now
 so they go in the same commit.
 
-## 4. Stage everything
+## 5. Stage everything
 - `git add -A`
 - Review what is staged: `git diff --cached --stat` and `git diff --cached --name-only`.
 - Safety: if a staged file is a secret or local-only file (`.env`, `.streamlit/secrets.toml`, `.venv/`,
   `*.duckdb`, raw CSVs under `data/raw/`) or a diff contains a key/token, stop: unstage it
   (`git restore --staged <path>`) and ask the user (it probably belongs in `.gitignore`).
 
-## 5. Single commit
+## 6. Single commit
 The release is still **one commit**, but its message follows
 [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) and describes what the
 release actually changes, instead of always being `chore(release)`.
@@ -77,8 +103,10 @@ apply, take the highest in this order:
 - **Scope** (optional): the main area touched, lowercase, e.g. `validator`, `executor`, `input-screen`,
   `cli`, `olist-db`, `skills`. Omit it when the release spans several areas.
 - **Breaking change** (bump is `major`): add `!` after the type/scope and a `BREAKING CHANGE:` footer.
-- Consistency with the bump: `feat` → at least `minor`; `!` → `major`. If the requested bump does not
-  match (e.g. `patch` with a `feat`), tell the user and ask which to keep before committing.
+- Consistency with the bump confirmed in step 3: `feat` → at least `minor`; `!` → `major`. Do not
+  re-ask the bump type: adjust the commit type to it (e.g. a `patch` release is described with `fix`,
+  `docs`, `refactor`...; only a `major` release uses `!`). If no honest type fits the confirmed bump,
+  tell the user and ask before committing.
 
 ### Message format
 Follow the session's commit attribution rules (trailer lines go last, after the footers):
@@ -109,15 +137,16 @@ Examples: `feat(validator): allow window functions in SELECT`, `fix(executor)!: 
   `$env:PATH = "$PWD\.venv\Scripts;$env:PATH"; git commit -F "<absolute path to commit_msg.txt>"`
 - After committing, `git status --porcelain` must be empty.
 
-## 6. Tag
+## 7. Tag
 - Check `git show HEAD:VERSION` equals `X.Y.Z` and `git tag -l "vX.Y.Z"` is empty.
 - `git tag -a vX.Y.Z -m "Release X.Y.Z"`.
 - Verify `git rev-list -n1 vX.Y.Z` equals `git rev-parse HEAD`.
 - Never move, delete or overwrite an existing tag unless explicitly asked.
 
-## 7. Report
+## 8. Report
 Checklist:
 - [ ] Tests pass (or: no tests, user approved)
+- [ ] Bump type recommended from the changes and confirmed by the user (note if it differs from the recommendation)
 - [ ] All changes staged and committed in one commit, Conventional Commits message with the right type
 - [ ] `VERSION` and README version history updated
 - [ ] Tag `vX.Y.Z` created on `HEAD`
