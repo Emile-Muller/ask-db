@@ -173,7 +173,13 @@ in `src/text2sql/executor.py`.
 
 ## Tests and lint
 
-All tests run offline: no LLM, no network.
+The suite has 600+ tests (one file per layer, plus the CLI, review log, JSON contracts, DB
+build and the red-team corpus), and they all run offline: no LLM, no network.
+
+[pre-commit](https://pre-commit.com/) (`.pre-commit-config.yaml`) runs `ruff check --fix` and
+`ruff format` on every commit once you have run `pre_commit install` (see Setup). If a hook
+changes files, the commit stops: re-stage the fixed files and commit again. You can also run
+the hooks on the whole repo by hand:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest --cov                 # all offline tests, with coverage
@@ -214,6 +220,10 @@ tests/           offline tests: one file per layer, CLI, review log, JSON contra
 In Claude Code, run `/release [major|minor|patch]` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, recommends a bump type from the changes and asks you to confirm or change it, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.6.2 — 2026-11-24
+- Docs: README "Tests and lint" now states the 600+ offline tests and explains the pre-commit hooks (`ruff check --fix`, `ruff format`, re-stage on change)
+- Showcase: new `favicon.svg` (database with check mark, light/dark aware) linked from `index.html`; stack chip now reads "pytest: 600+ offline tests"
 
 ### 1.6.1 — 2026-11-24
 - DB build renames the misspelled Kaggle columns `product_name_lenght` / `product_description_lenght` of `olist_products_dataset` to `*_length` at load time (`COLUMN_RENAMES`), only when still misspelled
