@@ -5,12 +5,14 @@
 
   var CATEGORIES = {
     valid: { label: "Real questions", desc: "Ordinary business questions that should get an answer." },
+    valid_sql: { label: "Safe SQL", desc: "Hand-written read-only SQL that should run and return data." },
     destructive: { label: "Delete or change data", desc: "Requests to wipe, edit or drop data." },
     prompt_injection: { label: "Prompt injection", desc: "Text trying to trick the AI into ignoring its rules." },
     stacked_sql: { label: "Hidden extra commands", desc: "A harmless query with a dangerous one tucked behind it." },
     exfiltration: { label: "Snooping", desc: "Attempts to read system details or files on the server." },
     sensitive_data: { label: "Private data", desc: "Requests for personal details or restricted text." },
     resource_abuse: { label: "Overload attempt", desc: "Queries built to make the database grind to a halt." },
+    runtime_error: { label: "Fails while running", desc: "Valid-looking SQL that the database cannot run." },
     out_of_scope: { label: "Out of scope", desc: "Questions this historical data cannot answer." }
   };
 
@@ -95,9 +97,13 @@
     return null;
   }
 
+  // results.json format 2: the question is trace.input, the deciding layer trace.refused_by.
+  function questionText(result) {
+    return (result.trace && result.trace.input) || result.id;
+  }
+
   function stopLayer(result) {
-    if (result.decided_by && result.decided_by.name) return result.decided_by.name;
-    return (result.trace && result.trace.refused_by && result.trace.refused_by.name) || null;
+    return (result.trace && result.trace.refused_by) || null;
   }
 
   function layerText(name) {
@@ -108,6 +114,11 @@
   function findingText(item) {
     if (item === null || item === undefined) return "";
     if (typeof item !== "object") return String(item);
+    // Review findings: {issue, impact, fix}; fix is SQL or null.
+    if ("issue" in item) {
+      return [item.issue, item.impact, item.fix ? "Fix: " + item.fix : null]
+        .filter(function (s) { return s; }).join(" — ");
+    }
     return Object.keys(item)
       .filter(function (k) { return item[k] !== null && item[k] !== ""; })
       .map(function (k) { return item[k]; })
@@ -118,6 +129,12 @@
   function outcomeBadge(result) {
     if (result.actual === "answer") {
       return el("span", { class: "badge ok" }, "✓ Answered");
+    }
+    if (result.actual === "error") {
+      return el("span", null,
+        el("span", { class: "badge warn" }, "⚠ Error"),
+        el("span", { class: "sub-note", text: result.error || "the run failed" })
+      );
     }
     var layer = LAYERS[stopLayer(result)];
     return el("span", null,
@@ -165,10 +182,11 @@
   // ---------- header, diagram, summary ----------
   function renderStats(results) {
     var answered = results.filter(function (r) { return r.actual === "answer"; }).length;
+    var blocked = results.filter(function (r) { return r.actual === "refuse"; }).length;
     var passed = results.filter(function (r) { return r.pass; }).length;
     document.getElementById("stat-total").textContent = results.length;
     document.getElementById("stat-answered").textContent = answered;
-    document.getElementById("stat-blocked").textContent = results.length - answered;
+    document.getElementById("stat-blocked").textContent = blocked;
     document.getElementById("stat-pass").textContent = passed + "/" + results.length;
   }
 
@@ -200,17 +218,19 @@
     var order = [];
     var stats = {};
     results.forEach(function (r) {
-      if (!stats[r.category]) { stats[r.category] = { total: 0, answered: 0, pass: 0 }; order.push(r.category); }
+      if (!stats[r.category]) { stats[r.category] = { total: 0, answered: 0, blocked: 0, pass: 0 }; order.push(r.category); }
       var s = stats[r.category];
       s.total++;
       if (r.actual === "answer") s.answered++;
+      if (r.actual === "refuse") s.blocked++;
       if (r.pass) s.pass++;
     });
 
     grid.textContent = "";
     order.forEach(function (key) {
       var s = stats[key];
-      var blocked = s.total - s.answered;
+      var blocked = s.blocked;
+      var errors = s.total - s.answered - s.blocked;
       var bar = el("span", { class: "bar", "aria-hidden": "true" });
       if (s.answered) bar.appendChild(el("span", { class: "a", style: "flex:" + s.answered }));
       if (blocked) bar.appendChild(el("span", { class: "b", style: "flex:" + blocked }));
@@ -218,6 +238,7 @@
       var parts = [];
       if (s.answered) parts.push(s.answered + " answered");
       if (blocked) parts.push(blocked + " blocked");
+      if (errors) parts.push(errors + (errors > 1 ? " errors" : " error"));
 
       var card = el("button", { type: "button", class: "cat", "data-cat": key, "aria-pressed": "false" },
         el("span", { class: "cat-top" },
@@ -254,11 +275,11 @@
     var flags = (screen && screen.details && screen.details.flags) || [];
     var isRaw = trace.input_type === "raw_sql";
     return section("The input",
-      el("pre", { class: "full-input", text: trace.input || result.question }),
+      el("pre", { class: "full-input", text: questionText(result) }),
       el("p", { class: "meta-line" },
         isRaw ? "Treated as SQL pasted directly (skips the AI). " : "Treated as a plain-English question. ",
         "Expected: ", el("strong", { text: result.expect === "answer" ? "an answer" : "a refusal" }),
-        ". Got: ", el("strong", { text: result.actual === "answer" ? "an answer" : "a refusal" }),
+        ". Got: ", el("strong", { text: { answer: "an answer", refuse: "a refusal" }[result.actual] || "an error" }),
         result.pass ? " ✓" : " ✗",
         flags.length ? el("span", null, " · Warning signs noticed: ", flags.map(function (f) { return el("span", { class: "tag", text: f }); })) : null
       )
@@ -295,7 +316,9 @@
       parts.push(el("p", { class: "reason" }, el("strong", { text: "Stopped before the AI saw it: " }), trace.reason || ""));
     }
 
-    if (trace.normalized_sql && result.actual === "answer") {
+    // It ran whenever the validator accepted it, even if layer 4 or 5 then stopped it.
+    var validated = stage(trace, "validator");
+    if (trace.normalized_sql && validated && validated.status === "pass") {
       parts.push(
         el("p", { class: "sql-label", text: "SQL that actually ran (rebuilt by the validator, row limit enforced)" }),
         el("pre", { class: "sql", text: trace.normalized_sql })
@@ -335,6 +358,19 @@
   function resultSection(result) {
     var res = result.trace && result.trace.result;
     if (!res || !res.columns) {
+      var trace = result.trace || {};
+      var stop = stopLayer(result);
+      if (stop === "executor") {
+        return section("The result", el("p", { class: "reason" },
+          el("strong", { text: "The database stopped the query: " }), trace.reason || ""));
+      }
+      if (stop === "output_check") {
+        var ex = stage(trace, "executor");
+        var n = ex && ex.details && ex.details.row_count;
+        return section("The result", el("p", { class: "reason" },
+          el("strong", { text: "The query ran" + (typeof n === "number" ? " (" + formatValue(n) + " rows)" : "") +
+            ", but the output check withheld it: " }), trace.reason || ""));
+      }
       return section("The result", el("p", { class: "muted", text: "Nothing ran, so no data was returned." }));
     }
     var head = el("tr");
@@ -354,6 +390,7 @@
     var extras = [];
     if (ocd.dropped_columns && ocd.dropped_columns.length) extras.push("restricted columns removed: " + ocd.dropped_columns.join(", "));
     if (ocd.masked_cells) extras.push(ocd.masked_cells + " cells masked");
+    if (ocd.cut_cells) extras.push(ocd.cut_cells + " long cells shortened");
     return section("The result",
       el("div", { class: "data-wrap" }, el("table", { class: "data" }, el("thead", null, head), body)),
       el("p", { class: "meta-line", text: note + (extras.length ? " · " + extras.join(" · ") : "") })
@@ -413,7 +450,7 @@
       var isRaw = r.trace && r.trace.input_type === "raw_sql";
       var btn = el("button", { type: "button", class: "q-btn", "aria-expanded": "false", "aria-controls": detailId },
         el("span", { class: "chev", "aria-hidden": "true", text: "▶" }),
-        el("span", { class: "q-text" + (isRaw ? " sql" : ""), text: r.question })
+        el("span", { class: "q-text" + (isRaw ? " sql" : ""), text: questionText(r) })
       );
       var main = el("tr", { class: "main" },
         el("td", null, btn),
@@ -435,7 +472,7 @@
         setOpen(btn.getAttribute("aria-expanded") !== "true");
       });
 
-      var haystack = [r.question, r.category, categoryLabel(r.category), r.trace && r.trace.reason,
+      var haystack = [questionText(r), r.category, categoryLabel(r.category), r.trace && r.trace.reason,
         r.trace && r.trace.generated_sql, r.review && r.review.summary].join(" ").toLowerCase();
       rows.push({ result: r, main: main, detail: detail, btn: btn, setOpen: setOpen, haystack: haystack });
       tbody.appendChild(main);

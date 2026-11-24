@@ -30,7 +30,8 @@ Your review is logged by exactly one command, with your JSON in a quoted heredoc
     { "trace_id": "...", "model": "<your model id>", ...the rest of your review JSON... }
     EOF
 
-The JSON must include `model` (your own model id). The writer rejects a review without it.
+Put `model` (your own model id) right after `trace_id`. If you leave it out, the review is
+still logged, with a null model.
 
 A hook (`src/text2sql/review_guard.py`) denies every other shell call, so do not try
 anything else. Find and read files with Glob, Grep and Read only, never the shell (no

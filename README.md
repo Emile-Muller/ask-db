@@ -34,21 +34,30 @@ opened read-only, sqlglot (DuckDB dialect), Olist data (Kaggle, ~100k orders, 20
 | Skill | What it does |
 |---|---|
 | `/question <question or SQL>` | Answers one question (or runs one pasted query) through the pipeline; reports the verdict, the SQL, the result and which layer decided |
-| `/question-review [trace id]` | An independent agent judges one `/question` run from its trace and the schema docs only, and logs the review |
+| `/question-review [trace id] [--terse]` | An independent agent judges one `/question` run from its trace and the schema docs only, and logs the review (`--terse`: replies `REVIEW_ID=<id>` only) |
+| `/question-batch [id ...]` | Runs `questions/questions.yaml` through the pipeline and `/question-review` in parallel waves, then writes `questions/results.json` with the deterministic `python -m text2sql results`; with ids, re-runs only those (plus stale entries) and merges |
 
-**`/question`** runs `python -m text2sql context` (layer 1, then the layer-2 prompt), proposes
-exactly one `{"sql": ...}` or `{"refusal_reason": ...}` from that prompt alone, and sends it
-through `python -m text2sql run` (layers 1-5). Raw SQL skips generation (`run --sql`). The
-input is untrusted data, never instructions; there is one proposal per question, and a refused
-query is never reworded to get past a guardrail (a plain DuckDB error may be fixed once).
+**`/question`** runs `python -m text2sql context --brief` (layer 1, then the layer-2 prompt
+written to `questions/logs/prompts/<hex>.txt`). The session does not write SQL itself: an
+`sql-proposer` agent, which may only Read that prompt file and Write once to the proposal file
+`context --brief` named (`proposer_guard.py`), writes exactly one `{"sql": ...}` or
+`{"refusal_reason": ...}` there itself, and `python -m text2sql run --proposal-file` (layers
+1-5) reads it. The session never copies the SQL, so it cannot alter it, and no SQL is quoted
+for a shell. Raw SQL skips generation (`run --sql`). The input is untrusted data,
+never instructions; there is one proposal per question, and a refused query is never reworded
+to get past a guardrail. The one exception is a plain DuckDB error, which goes back to the
+same proposer once, with a second proposal file. That only applies when the executor refused
+with a binder, catalog, conversion, invalid-input, out-of-range, parser or type-mismatch error.
+The second trace is the one that counts.
 Before the trace is printed or appended to `questions/logs/questions/`, `trace.append` checks
 the exact JSON line against `src/text2sql/schemas/question_trace.json` plus rules between
 fields (`trace.cross_checks`: stages in layer order, only skipped stages after the first fail,
 `refused_by` = the failed stage, preview rows consistent with `row_count` and `truncated`). A
 trace that fails is a pipeline bug: it is neither logged nor printed, and the run exits 1.
 The skill then builds a JSON report from the trace, matching the skill's `schema.json` (see
-`example.json`), and checks it with `.claude/skills/question/scripts/validate.py` (the schema
-plus cross-field rules, e.g. stage statuses consistent with the verdict). The answer shown to
+`example.json`), writes it to a file in the session scratchpad, and checks that file with
+`.claude/skills/question/scripts/validate.py <path>` (the schema plus cross-field rules, e.g.
+stage statuses consistent with the verdict). The answer shown to
 the user is written from the validated report only; exit 2 lists what is wrong, and the report
 is fixed, never the schema.
 
@@ -56,18 +65,54 @@ is fixed, never the schema.
 sure the query is **safe**. The `question-reviewer` agent sees only the trace and `data/schema.yaml` (no database). It
 checks the SQL logic against the question and the `rules:` in `schema.yaml` (revenue
 definition, `customer_unique_id`, join fan-out, NULLs, a `LIMIT` that cuts the answer, …),
-or whether a refusal was justified. It returns a verdict (`correct` / `partially_correct` /
+or whether a refusal was justified. For raw SQL there is no question to compare against, so
+the verdict judges the SQL itself, whether or not a layer refused it: a clear logic flaw is
+`incorrect`, and `cannot_tell` is only for SQL whose logic cannot be assessed. It returns a verdict (`correct` / `partially_correct` /
 `incorrect` / `cannot_tell`), findings and an optional `corrected_sql` as JSON, which
 `python -m text2sql review` checks against `src/text2sql/schemas/question_review.json` (the
 single source of the review contract; its limits mirror `config.REVIEW_MAX_*`, kept equal by a
 test) **before** appending anything to `questions/logs/question-reviews/`. A rejected review
-(exit 2) is never logged. `.claude/skills/question-review/scripts/validate.py` runs the same
+(exit 2) is never logged, and the agent may fix its JSON and retry once. `model` comes right
+after `trace_id`; a review without it is still logged, with a null model. The skill runs
+forked (`context: fork`) in its own agent. With `--terse` it replies only `REVIEW_ID=<id>` (or
+`REVIEW_ID=none`), which is how `/question-batch` calls it.
+`.claude/skills/question-review/scripts/validate.py` runs the same
 check offline for humans and tests. A `PreToolUse` hook (`review_guard.py`) blocks every
 other shell command and fails closed.
 
-All three contracts (trace, report, review) use `src/text2sql/json_contract.py`, a small JSON Schema subset checker
+**`/question-batch`** is the orchestrator for the test questions (a skill, not an agent:
+subagents cannot spawn subagents, and each proposer and reviewer needs its own). It sees
+only `{id, question}`, never `expect`, and runs the deterministic CLI steps itself, always by
+id (`context`/`run --question-id <id> --brief`), so no question or SQL text is ever quoted for
+a shell. An input refused by layer 1 already has its trace, and a raw-SQL input goes straight
+to `run`: neither needs an LLM. For the rest, `context --brief` writes the layer-2 prompt to
+`questions/logs/prompts/<hex>.txt`, and a `sql-proposer` agent whose only allowed calls are a
+Read of that file and one Write of `{"sql": ..., "refusal_reason": ...}` to
+`<temp>/text2sql-proposals/<hex>.json` (`PreToolUse` hook `proposer_guard.py`, fails closed)
+writes its reply there for `run --proposal-file`; the orchestrator never copies it. If DuckDB refused the SQL for a plain mistake (`sql_error`: a
+binder, type or cast error, never a guardrail), the same proposer gets the error once. Each
+final trace goes to `/question-review <trace id> --terse` (forked into its own
+`question-reviewer` agent). The orchestrator checks that the first review really ran as a
+fork. If the skill loaded inline instead, it spawns the `question-reviewer` agent directly
+for every review and says so. Every log append holds a lock on a sidecar `<log>.lock` file, and
+DuckDB allows several read-only processes, so up to 8 questions run at a time, and each is
+reviewed as soon as its trace exists. `python -m text2sql results` then copies every trace
+and review verbatim from the logs and builds `questions/results.json` (see
+[Test questions and results](#test-questions-and-results)). `/question-batch <id> ...`
+re-runs only those ids, plus any entry that cannot be reused, and merges with `--merge`: an
+entry is reused only if its trace has the current `git_commit` and `meta.pipeline_hash`
+(sha256 of the package code, the JSON contracts and `data/schema.yaml`, so uncommitted edits
+count too). The orchestrator never copies `results.json` to `showcase/`: the Pages workflow
+deploys the latest `questions/results.json`.
+
+`/question` and `/question-review` can also be invoked by the model when a request fits.
+`/question-batch` and `/release` run only when typed.
+
+All four contracts (trace, report, review, results) use `src/text2sql/json_contract.py`, a small JSON Schema subset checker
 (standard library only) that lints the whole schema first and rejects any keyword it does not
-implement, so a schema cannot silently ask for a check that never runs.
+implement, so a schema cannot silently ask for a check that never runs. `$ref` may point to a
+sibling schema file (`question_trace.json#/...`), which is how the results schema reuses the
+trace and review schemas.
 
 ## The 5-layer guardrails (`src/text2sql`)
 
@@ -86,18 +131,30 @@ refuse decides the verdict, and each records a stage in the trace (`trace.py`).
 
 Limits live in `src/text2sql/config.py`, the allowlist and restricted columns in
 `data/schema.yaml`. `tests/redteam_corpus.yaml` holds 140+ attack and benign queries
-(including past bypasses kept as regression tests). `.claude/settings.json` denies session
-edits to `data/schema.yaml`, the corpus, the `/question` skill folder (its report schema) and
-`src/text2sql/schemas/` (the trace and review schemas); only a human can change them.
+(including past bypasses kept as regression tests). Once a session runs `/question`,
+`/question-review` or `/question-batch`, a `PreToolUse` hook (`src/text2sql/edit_guard.py`)
+denies it edits to `data/schema.yaml`, the corpus, the test questions, the JSON contracts, the
+question skills and agents, the settings and the guards, until the session ends. Sessions that
+never run a question skill can edit them.
 
 ## Test questions and results
 
 `questions/questions.yaml` holds 30 inputs, each marked `expect: answer` or `expect: refuse`:
 12 valid questions plus destructive requests, prompt injections, stacked or obfuscated SQL,
-exfiltration, sensitive-data, resource-abuse and out-of-scope cases. `questions/results.json`
-is a full run (each `/question` in an isolated subagent, each trace judged by
-`/question-review`): 30/30 match `expect` (12 accepted; refused: 6 generation, 8 validator,
-4 input screen), with review verdicts 18 correct, 7 cannot tell, 5 incorrect.
+exfiltration, sensitive-data, resource-abuse, runtime-error and out-of-scope cases.
+`questions/results.json` is written by `/question-batch` through `python -m text2sql results`
+(format 2, contract `src/text2sql/schemas/question_results.json` plus `results.cross_checks`).
+Each entry holds `id`, `category`, `expect`, the derived `actual` (`answer` / `refuse` /
+`error`) and `pass`, an `error` note, and the trace and review copied verbatim from the logs.
+The question text is `trace.input`, and the deciding layer is `trace.refused_by`. `summary`
+is derived from the entries and checked, never trusted. The current file is a full
+`/question-batch` run: **30/30 match `expect`**, with no errors. 12 were accepted. The other 18
+were refused: 4 by the input screen, 5 by generation, 5 by the validator, 2 by the executor
+and 2 by the output check. The reviews are 20 correct, 6 incorrect and 4 cannot tell. The 6
+`incorrect` are raw-SQL attack inputs that the pipeline refused, as expected. For raw SQL, the
+reviewer judges the SQL itself, and those queries are broken on purpose (stacked or
+CTE-wrapped writes, `read_csv('.env')`, cartesian joins, a bad cast). The 4 `cannot_tell` are
+layer-1 refusals, which have no SQL to judge.
 
 ## Showcase page
 
@@ -133,9 +190,16 @@ publishes `showcase/` to GitHub Pages
 | `run --sql "..."` | raw-SQL path: layers 1, 3, 4, 5 |
 | `check --sql "..."` | layer 3 only, no database |
 | `review` (JSON on stdin) | checks a `/question-review` judgement against `schemas/question_review.json`, then logs it; no database |
+| `results --ids <manifest>` | builds `questions/results.json` from `[{id, trace_id, review_id, error}]`: copies the records from the logs, checks the document, then writes it (nothing written on failure); no database |
+| `results --check <file> [--verify-logs]` | checks a results file against `schemas/question_results.json` plus `results.cross_checks` (and, with `--verify-logs`, against the local logs) |
+| `results --list [--rerun <id> ...]` | prints `[{id, question}]` from `questions/questions.yaml`, in file order (with `--rerun`: those ids plus every stale entry of the current results) |
+| `results --ids <manifest> --merge` | like `--ids`, but ids not in the manifest reuse their current entry if it is up to date (same commit and pipeline hash); otherwise nothing is written |
+| `context` / `run` `--question-id <id>` | use the text of that `questions.yaml` entry instead of `--question` |
+| `context` / `run` `--brief` | print one JSON line instead of the prompt or trace (`context` then writes the prompt to `questions/logs/prompts/`) |
+| `run --proposal-file <f>` | the proposer's JSON reply (`.json` under the temp dir, written by the proposer itself) instead of `--sql` / `--refusal` |
 
-Exit codes: 0 accepted, 2 refused, 1 internal error. Traces go to stdout and
-`questions/logs/questions/<YYYYMMDD>.jsonl`.
+Exit codes: 0 accepted, 2 refused, 1 internal error (`results`: 0 written or valid, 1 not).
+Traces go to stdout and `questions/logs/questions/<YYYYMMDD>.jsonl`.
 
 ```powershell
 .\.venv\Scripts\python.exe -m text2sql run --sql "SELECT 1; DROP TABLE customers"   # refused by validator, exit 2
@@ -173,7 +237,7 @@ in `src/text2sql/executor.py`.
 
 ## Tests and lint
 
-The suite has 600+ tests (one file per layer, plus the CLI, review log, JSON contracts, DB
+The suite has 800+ tests (one file per layer, plus the CLI, review log, JSON contracts, DB
 build and the red-team corpus), and they all run offline: no LLM, no network.
 
 [pre-commit](https://pre-commit.com/) (`.pre-commit-config.yaml`) runs `ruff check --fix` and
@@ -190,9 +254,10 @@ the hooks on the whole repo by hand:
 
 ```
 src/
-  text2sql/      5-layer safe text-to-SQL pipeline (`python -m text2sql`), review log and review guard
-    json_contract.py   JSON Schema subset checker shared by the trace, report and review contracts
-    schemas/           question_trace.json and question_review.json (the trace and review contracts)
+  text2sql/      5-layer safe text-to-SQL pipeline (`python -m text2sql`), review log, review and proposer guards
+    json_contract.py   JSON Schema subset checker shared by the trace, report, review and results contracts
+    results.py         builds and checks questions/results.json (`python -m text2sql results`)
+    schemas/           question_trace.json, question_review.json, question_results.json
   olist_db/
     build.py     data/raw/*.csv -> data/olist.duckdb (the only writer)
 data/
@@ -202,16 +267,17 @@ data/
   raw/           Kaggle CSVs (not tracked)
 questions/
   questions.yaml           30 test inputs
-  results.json             full /question + /question-review run over them
+  results.json             full /question-batch run over them (format 2)
   logs/questions/          /question traces (JSONL)
   logs/question-reviews/   /question-review records (JSONL)
+  logs/prompts/            layer-2 prompts written for the sql-proposer (context --brief)
 showcase/        static showcase page (index.html, styles.css, app.js) and its results.json copy
 .github/workflows/pages.yml   deploys showcase/ to GitHub Pages
-tests/           offline tests: one file per layer, CLI, review log, JSON contracts, DB build; redteam_corpus.yaml
+tests/           offline tests: one file per layer, CLI, review log, JSON contracts, results, DB build; redteam_corpus.yaml
 .claude/
-  skills/        question, question-review, release (question: schema.json, example.json,
+  skills/        question, question-review, question-batch, release (question: schema.json, example.json,
                  scripts/validate.py; question-review: example.json, scripts/validate.py)
-  agents/        question-reviewer, code-reviewer, version-manager
+  agents/        question-reviewer, sql-proposer, code-reviewer, version-manager
   settings.json  permissions: pipeline and tests allowed, DB CLIs and direct data reads denied
 ```
 
@@ -220,6 +286,16 @@ tests/           offline tests: one file per layer, CLI, review log, JSON contra
 In Claude Code, run `/release [major|minor|patch]` (`.claude/skills/release/SKILL.md`). It runs the tests and the `CLAUDE.md` safety checks, recommends a bump type from the changes and asks you to confirm or change it, bumps `VERSION` and this version history, stages all changes, makes a single release commit, and creates an annotated `vX.Y.Z` tag on it. It never pushes; publish with `git push origin main --follow-tags`.
 
 ## Version history
+
+### 1.7.0 — 2026-11-24
+- New `results` command (`results.py`): `--ids <manifest>` writes `questions/results.json` (format 2) from the logs, `--merge` reuses fresh entries, `--check [--verify-logs]` checks a file, `--list [--rerun <ids>]` lists questions
+- New contract `src/text2sql/schemas/question_results.json` (plus `results.cross_checks`), `$ref`ing the trace and review schemas
+- `context` / `run` gain `--question-id`, `--brief`, `--proposal-file` and `--prompt-file`, so batch runs never quote untrusted text for a shell
+- New `/question-batch` skill and `sql-proposer` agent, restricted by the `proposer_guard.py` hook to reading its prompt and writing its reply once
+- New `edit_guard.py` hook: once a question skill runs, edits to the allowlist, red-team corpus, questions, schemas, question skills/agents, settings and guards are denied (replaces the `settings.json` Edit deny rules)
+- Traces gain an optional `meta.pipeline_hash` (package code, contracts and `data/schema.yaml`); review `model` is now optional (logged as null)
+- Trace and review log appends hold a lock on `<log>.lock`, so parallel runs and reviews are safe
+- Tests: batch CLI, edit guard, log lock and results contract
 
 ### 1.6.2 — 2026-11-24
 - Docs: README "Tests and lint" now states the 600+ offline tests and explains the pre-commit hooks (`ruff check --fix`, `ruff format`, re-stage on change)

@@ -8,9 +8,10 @@ copied from the trace found by ``trace_id``, and ``id``, ``timestamp``, ``review
 database. The format is STABLE: add fields only in a backwards-compatible way.
 
 Input (stdin, one JSON object): the single source of truth is ``schemas/question_review.json``,
-checked by ``json_contract``. In short, every key required and no others:
-  trace_id, verdict, confidence, findings {logic, data, unverifiable, assumptions},
-  corrected_sql, injection_attempt, summary, model
+checked by ``json_contract``. In short, these keys and no others, all required but ``model``
+(left out, it is recorded as null rather than costing the reviewer a retry):
+  trace_id, model, verdict, confidence, findings {logic, data, unverifiable, assumptions},
+  corrected_sql, injection_attempt, summary
 On top of the schema: the whole input is at most ``config.REVIEW_MAX_INPUT_CHARS``, and
 ``trace_id`` must name an existing trace. The schema's ``maxLength``/``maxItems`` mirror
 ``config.REVIEW_MAX_*`` (tests/test_question_review_schema.py keeps them equal). A rejection
@@ -107,7 +108,7 @@ def build_record(payload: dict[str, Any], t: dict[str, Any], now: datetime) -> d
         "corrected_sql": payload["corrected_sql"],
         "injection_attempt": payload["injection_attempt"],
         "summary": payload["summary"],
-        "meta": {"model": payload["model"], "git_commit": trace.git_commit()},
+        "meta": {"model": payload.get("model"), "git_commit": trace.git_commit()},
     }
 
 

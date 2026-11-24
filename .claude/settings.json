@@ -12,7 +12,9 @@
       "PowerShell(.\\.venv\\Scripts\\python.exe -m pytest:*)",
       "Bash(.venv/Scripts/python.exe -m text2sql review:*)",
       "Bash(python -m text2sql review:*)",
-      "Bash(.venv/Scripts/python.exe .claude/skills/question/scripts/validate.py:*)"
+      "Bash(.venv/Scripts/python.exe .claude/skills/question/scripts/validate.py:*)",
+      "PowerShell(.\\.venv\\Scripts\\python.exe .claude/skills/question/scripts/validate.py:*)",
+      "PowerShell(.\\.venv\\Scripts\\python.exe .claude\\skills\\question\\scripts\\validate.py:*)"
     ],
     "deny": [
       "Bash(duckdb:*)",
@@ -26,11 +28,7 @@
       "Read(./data/raw/**)",
       "Edit(./data/*.duckdb)",
       "Edit(./data/*.duckdb.wal)",
-      "Edit(./questions/logs/**)",
-      "Edit(./tests/redteam_corpus.yaml)",
-      "Edit(./data/schema.yaml)",
-      "Edit(./.claude/skills/question/**)",
-      "Edit(./src/text2sql/schemas/**)"
+      "Edit(./questions/logs/**)"
     ]
   }
 }

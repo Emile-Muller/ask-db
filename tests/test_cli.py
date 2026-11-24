@@ -49,7 +49,7 @@ def assert_trace_shape(t: dict) -> None:
         assert t["normalized_sql"]
     else:
         assert t["result"] is None and t["reason"]
-    assert set(t["meta"]) == {"model", "git_commit"}
+    assert set(t["meta"]) == {"model", "git_commit", "pipeline_hash"}
     assert trace.schema_errors(json.loads(json.dumps(t))) == []
 
 

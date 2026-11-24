@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCHEMAS = [
     ROOT / "src" / "text2sql" / "schemas" / "question_review.json",
     ROOT / "src" / "text2sql" / "schemas" / "question_trace.json",
+    ROOT / "src" / "text2sql" / "schemas" / "question_results.json",
     ROOT / ".claude" / "skills" / "question" / "schema.json",
 ]
 
@@ -28,7 +29,44 @@ def ok(value, schema) -> bool:
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.name)
 def test_real_schemas_lint_clean(path):
-    lint(json.loads(path.read_text(encoding="utf-8")))
+    json_contract.load_schema(path)  # lints, and loads the sibling files it $refs
+
+
+# --- $ref to a sibling schema file ------------------------------------------------------
+
+
+def _write(path: Path, schema: dict) -> Path:
+    path.write_text(json.dumps(schema), encoding="utf-8")
+    return path
+
+
+def test_sibling_ref_resolves_in_the_sibling(tmp_path):
+    _write(tmp_path / "b.json", {"$defs": {"t": {"type": "string"}}, "properties": {
+        "a": {"$ref": "#/$defs/t"}}})  # fmt: skip
+    root = _write(tmp_path / "a.json", {"properties": {
+        "whole": {"$ref": "b.json"}, "part": {"$ref": "b.json#/$defs/t"}}})  # fmt: skip
+    assert json_contract.check_schema({"whole": {"a": "x"}, "part": "y"}, root) == []
+    assert json_contract.check_schema({"whole": {"a": 1}, "part": 2}, root) == [
+        "$.whole.a: expected string",
+        "$.part: expected string",
+    ]
+
+
+@pytest.mark.parametrize(
+    "ref", ["../b.json", "sub/b.json", "b.yaml", "b.json#x", "b.json#/missing", "nope.json"]
+)
+def test_bad_sibling_refs_are_rejected(tmp_path, ref):
+    _write(tmp_path / "b.json", {"type": "string"})
+    root = _write(tmp_path / f"a-{abs(hash(ref))}.json", {"$ref": ref})
+    with pytest.raises((ValueError, OSError)):
+        json_contract.load_schema(root)
+
+
+def test_sibling_ref_cycles_are_rejected(tmp_path):
+    _write(tmp_path / "x.json", {"$ref": "y.json"})
+    _write(tmp_path / "y.json", {"$ref": "x.json"})
+    with pytest.raises(ValueError, match="cycle"):
+        json_contract.load_schema(tmp_path / "x.json")
 
 
 # --- lint: the whole schema, reached or not ---------------------------------------------

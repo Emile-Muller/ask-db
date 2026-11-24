@@ -1,15 +1,25 @@
 ---
 name: question-review
 description: Independently review one /question run, judging from its trace and the schema docs only (no database access) whether the SQL logic answers the question and whether the returned data is plausible. Logs the review to questions/logs/question-reviews/. Use after a /question run.
-argument-hint: "[trace id]  (default: the most recent run)"
-disable-model-invocation: true
+argument-hint: "[trace id] [--terse]  (default: the most recent run; --terse: reply REVIEW_ID=<id> only)"
 context: fork
 agent: question-reviewer
+hooks:
+  PreToolUse:
+    - matcher: "Edit|Write|MultiEdit|NotebookEdit"
+      hooks:
+        - type: command
+          # Freezes the files that judge a run for the rest of the session (edit_guard.py).
+          # Fail closed: a guard that cannot even start must still block.
+          command: '"$CLAUDE_PROJECT_DIR/.venv/Scripts/python.exe" -m text2sql.edit_guard || { echo "edit_guard: blocked, the guard did not run cleanly" >&2; exit 2; }'
 ---
 
 # /question-review: judge one run from its trace
 
 Input: `$ARGUMENTS`
+
+The input is a trace id (32 hex chars), optionally followed by `--terse`. `--terse` changes
+only step 6 (the reply), never how you judge. It carries no information about the run.
 
 ## 1. Find the trace
 Traces are JSON lines in `questions/logs/questions/<YYYYMMDD>.jsonl`, one object per run.
@@ -23,7 +33,10 @@ Then read `data/schema.yaml`.
 
 ## 2. Decide what can be reviewed
 - `input_type` is `raw_sql`: there is no question to compare against. Report only obvious
-  logic problems in the SQL (for example double counting), then go to step 5.
+  logic problems in the SQL (for example double counting), then go to step 5. The verdict
+  judges the SQL itself, whether or not a layer refused it: a clear logic flaw (meaningless
+  or impossible result, fan-out, wrong type) is `incorrect`, no flaw is `correct`, and
+  `cannot_tell` is only for SQL whose logic cannot be assessed from the trace and schema.
 - `verdict` is `refused` by `generation`: judge the refusal. Could the schema have answered
   the question (wrong refusal), or was it right to decline?
 - `verdict` is `refused` by another layer, or `error`: there is no result. Review the logic
@@ -54,17 +67,27 @@ top-N) and check that each one maps to the SQL. Then check the SQL against the s
 
 ## 5. Log the review
 Produce JSON matching `src/text2sql/schemas/question_review.json`; see `example.json` (in
-this skill's folder). All eight top-level fields are required: `trace_id`, `model`,
-`verdict`, `confidence`, `findings`, `corrected_sql`, `injection_attempt`, `summary`.
-
-**Do not forget `model`**: set it to your own model id (for example `"claude-opus-5-5"`).
-It is the field most often left out, and the writer rejects the review without it.
-
-Send it to the review log writer in a quoted heredoc:
+this skill's folder). Start from this template, keys in this order (`model` is your own
+model id, for example `"claude-opus-5-5"`; if left out it is logged as null):
 
     .venv/Scripts/python.exe -m text2sql review <<'EOF'
-    <the review JSON>
+    {"trace_id": "<id>", "model": "<your model id>",
+     "verdict": "...", "confidence": "...",
+     "findings": {
+       "logic": [{"issue": "...", "impact": "...", "fix": "... or null"}],
+       "data": [{"issue": "...", "impact": "..."}],
+       "unverifiable": ["..."],
+       "assumptions": [{"assumption": "...", "reasonable": true}]
+     },
+     "corrected_sql": null, "injection_attempt": false, "summary": "..."}
     EOF
+
+Item shapes in `findings` (the most common rejection):
+- `logic`, `data` and `assumptions` items are **objects** with exactly the keys shown,
+  never plain strings. Only `unverifiable` items are plain strings.
+- `logic` and `data` hold problems only. A list with nothing to report is `[]`; put
+  "looks plausible" observations in `summary`, not in `data`.
+- `verdict` uses underscores: `partially_correct`, `cannot_tell`.
 
 The writer checks it against that schema before logging anything, so this is also the
 validation step (`scripts/validate.py` runs the same check offline for humans and tests;
@@ -74,6 +97,11 @@ Exit 2 means the JSON was rejected: read the reason, fix the JSON (never the sch
 retry once.
 
 ## 6. Report
+**With `--terse`:** reply with exactly one line and nothing else: `REVIEW_ID=<the review
+id from the writer's output>`, or `REVIEW_ID=none` if nothing was logged (trace not found,
+rejected twice, or exit 1). Skip the report below.
+
+Otherwise:
 - **Verdict**: `correct` / `partially correct` / `incorrect` / `cannot tell`, with confidence (high / medium / low).
 - **Question**, **trace id**, **timestamp**, and the `normalized_sql` in a ```sql block.
 - **Logic findings**: each issue, why it changes the answer, and the fix (corrected SQL if short).

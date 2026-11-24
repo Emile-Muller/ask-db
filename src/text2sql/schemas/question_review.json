@@ -4,7 +4,7 @@
   "title": "/question-review judgement",
   "description": "The reviewer's input to `python -m text2sql review`. This file IS the contract: src/text2sql/review_log.py checks every review against it before logging (limits mirror config.REVIEW_MAX_*, kept equal by a test; on top of this schema the whole JSON is at most config.REVIEW_MAX_INPUT_CHARS characters and `trace_id` must name an existing trace). Only the judgement: the writer copies the trace fields from the trace found by `trace_id` and generates `id`, `timestamp`, `review_type` and `meta.git_commit`.",
   "type": "object",
-  "required": ["trace_id", "verdict", "confidence", "findings", "corrected_sql", "injection_attempt", "summary", "model"],
+  "required": ["trace_id", "verdict", "confidence", "findings", "corrected_sql", "injection_attempt", "summary"],
   "additionalProperties": false,
   "properties": {
     "trace_id": {
@@ -92,7 +92,7 @@
       "$ref": "#/$defs/text"
     },
     "model": {
-      "description": "The reviewer's model id.",
+      "description": "The reviewer's model id. Optional: when it is left out the writer records null in meta.model instead of rejecting the review (a forgotten model used to cost a retry).",
       "type": ["string", "null"],
       "pattern": "\\S",
       "maxLength": 100

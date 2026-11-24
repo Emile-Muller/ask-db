@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "question-results.schema.json",
+  "title": "/question-batch results (questions/results.json, format 2)",
+  "description": "One batch run of questions/questions.yaml through /question and /question-review, written by `python -m text2sql results` (src/text2sql/results.py). This file IS the structural contract: the writer checks the whole document against it, plus the rules between fields in results.cross_checks (summary counts, pass/actual, ids vs questions.yaml, review-to-trace join), and writes nothing (exit 1) when it does not match. Each `trace` is a verbatim copy of its line in questions/logs/questions/ and is checked against question_trace.json; each `review` is a verbatim copy of its line in questions/logs/question-reviews/ (the record review_log.build_record writes, not the reviewer's input, which is what question_review.json describes), so its judgement fields $ref that schema.",
+  "type": "object",
+  "required": ["format", "generated_at", "method", "summary", "results"],
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "description": "Format version of this file.",
+      "const": 2
+    },
+    "generated_at": {
+      "description": "When the writer ran (UTC, ISO 8601, seconds).",
+      "$ref": "question_trace.json#/properties/timestamp"
+    },
+    "method": {
+      "description": "How the run was made (isolation of the run and review agents).",
+      "$ref": "question_review.json#/$defs/text"
+    },
+    "summary": {
+      "description": "Derived from results[]; checked by results.cross_checks, never trusted.",
+      "type": "object",
+      "required": ["total", "pass", "fail", "errors", "failed_ids", "outcome_by_deciding_layer", "review_verdicts"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {"$ref": "#/$defs/count"},
+        "pass": {"$ref": "#/$defs/count"},
+        "fail": {"$ref": "#/$defs/count"},
+        "errors": {
+          "description": "Entries with a non-null `error` (run or review failed).",
+          "$ref": "#/$defs/count"
+        },
+        "failed_ids": {
+          "description": "Ids of the entries with pass = false, in results order.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/slug"}
+        },
+        "outcome_by_deciding_layer": {
+          "description": "`accepted`, the layer that refused, or `error` (no trace or verdict error); zero counts are left out.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "accepted": {"$ref": "#/$defs/positive"},
+            "input_screen": {"$ref": "#/$defs/positive"},
+            "generation": {"$ref": "#/$defs/positive"},
+            "validator": {"$ref": "#/$defs/positive"},
+            "executor": {"$ref": "#/$defs/positive"},
+            "output_check": {"$ref": "#/$defs/positive"},
+            "error": {"$ref": "#/$defs/positive"}
+          }
+        },
+        "review_verdicts": {
+          "description": "Review verdicts of the reviewed entries; zero counts are left out.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "correct": {"$ref": "#/$defs/positive"},
+            "partially_correct": {"$ref": "#/$defs/positive"},
+            "incorrect": {"$ref": "#/$defs/positive"},
+            "cannot_tell": {"$ref": "#/$defs/positive"}
+          }
+        }
+      }
+    },
+    "results": {
+      "description": "One entry per questions.yaml entry, in file order (checked by results.cross_checks).",
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "positive": {"type": "integer", "minimum": 1},
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "entry": {
+      "type": "object",
+      "required": ["id", "category", "expect", "actual", "pass", "error", "trace", "review"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The questions.yaml id (the question text is trace.input).",
+          "$ref": "#/$defs/slug"
+        },
+        "category": {"$ref": "#/$defs/slug"},
+        "expect": {"enum": ["answer", "refuse"]},
+        "actual": {
+          "description": "Derived: trace verdict accepted -> answer, refused -> refuse, error or no trace -> error.",
+          "enum": ["answer", "refuse", "error"]
+        },
+        "pass": {
+          "description": "Derived: expect == actual.",
+          "type": "boolean"
+        },
+        "error": {
+          "description": "Why the run or the review failed (exit 1, no trace or no review); null when both succeeded.",
+          "type": ["string", "null"],
+          "pattern": "\\S",
+          "maxLength": 2000
+        },
+        "trace": {
+          "description": "Verbatim copy of the trace's log line; null only when the run produced none.",
+          "type": ["object", "null"],
+          "if": {"type": "object"},
+          "then": {"$ref": "question_trace.json"}
+        },
+        "review": {
+          "description": "Verbatim copy of the review's log line; null when no review was logged.",
+          "type": ["object", "null"],
+          "if": {"type": "object"},
+          "then": {"$ref": "#/$defs/review_record"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"error": {"const": null}}},
+          "then": {
+            "properties": {
+              "trace": {"type": "object"},
+              "review": {"type": "object"}
+            }
+          }
+        }
+      ]
+    },
+    "review_record": {
+      "description": "One line of questions/logs/question-reviews/ (review_log.build_record).",
+      "type": "object",
+      "required": ["id", "timestamp", "trace_id", "trace_timestamp", "input", "input_type", "trace_verdict", "refused_by", "review_type", "verdict", "confidence", "normalized_sql", "findings", "corrected_sql", "injection_attempt", "summary", "meta"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "question_trace.json#/properties/id"},
+        "timestamp": {"$ref": "question_trace.json#/properties/timestamp"},
+        "trace_id": {"$ref": "question_review.json#/properties/trace_id"},
+        "trace_timestamp": {"$ref": "question_trace.json#/properties/timestamp"},
+        "input": {"$ref": "question_trace.json#/properties/input"},
+        "input_type": {"$ref": "question_trace.json#/properties/input_type"},
+        "trace_verdict": {"$ref": "question_trace.json#/properties/verdict"},
+        "refused_by": {"$ref": "question_trace.json#/properties/refused_by"},
+        "review_type": {"enum": ["answer", "refusal", "sql_only"]},
+        "verdict": {"$ref": "question_review.json#/properties/verdict"},
+        "confidence": {"$ref": "question_review.json#/properties/confidence"},
+        "normalized_sql": {"type": ["string", "null"]},
+        "findings": {"$ref": "question_review.json#/properties/findings"},
+        "corrected_sql": {"$ref": "question_review.json#/properties/corrected_sql"},
+        "injection_attempt": {"$ref": "question_review.json#/properties/injection_attempt"},
+        "summary": {"$ref": "question_review.json#/properties/summary"},
+        "meta": {
+          "type": "object",
+          "required": ["model", "git_commit"],
+          "additionalProperties": false,
+          "properties": {
+            "model": {"$ref": "question_review.json#/properties/model"},
+            "git_commit": {"$ref": "question_trace.json#/properties/meta/properties/git_commit"}
+          }
+        }
+      }
+    }
+  }
+}

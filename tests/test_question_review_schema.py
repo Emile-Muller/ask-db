@@ -40,6 +40,7 @@ VALID = [
     EXAMPLE,
     edited(["corrected_sql"], "SELECT 1"),
     edited(["model"], None),
+    edited(["model"], KeyError),  # optional: logged as null
     edited(["findings", "logic", 0, "fix"], None),
     edited(["findings", "logic"], [LOGIC] * config.REVIEW_MAX_FINDINGS),
     edited(["verdict"], "cannot_tell"),

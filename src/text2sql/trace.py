@@ -21,8 +21,11 @@ fields only in a backwards-compatible way.
   "generated_sql":  str | null,   SQL proposed by the model (null on the raw-SQL path)
   "normalized_sql": str | null,   SQL that passed the validator and was executed
   "result": {"columns": [str], "rows": [[...]], "row_count": int, "truncated": bool} | null,
-  "meta": {"model": str | null, "git_commit": str}
-}
+  "meta": {"model": str | null, "git_commit": str, "pipeline_hash": str}
+}                  (pipeline_hash: see pipeline_hash(); absent in traces older than it)
+
+Appends are serialized by a lock on a sidecar ``<log>.lock`` file (``_locked``), so any
+number of runs and reviews may append to the same log at the same time.
 
 This block is a summary; the contract is ``schemas/question_trace.json`` plus
 ``cross_checks`` below. ``append`` checks the exact JSON line against both before writing
@@ -44,7 +47,9 @@ Stage details:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import subprocess  # noqa: S404 - only used for a fixed git command
 import tempfile
 import time
@@ -59,10 +64,17 @@ from typing import Any
 
 from text2sql import config, json_contract
 
+if os.name == "nt":
+    import msvcrt
+else:  # pragma: no cover - POSIX
+    import fcntl
+
 LAYERS: tuple[str, ...] = ("input_screen", "generation", "validator", "executor", "output_check")
 PASS, FAIL, SKIPPED = "pass", "fail", "skipped"
 ACCEPTED, REFUSED, ERROR = "accepted", "refused", "error"
-SCHEMA_PATH = Path(__file__).resolve().parent / "schemas" / "question_trace.json"
+PACKAGE_DIR = Path(__file__).resolve().parent
+SCHEMA_PATH = PACKAGE_DIR / "schemas" / "question_trace.json"
+LOCK_TIMEOUT_S = 30.0  # parallel batch runs wait at most this long for the log lock
 
 
 class TraceError(ValueError):
@@ -130,7 +142,11 @@ class TraceBuilder:
             "generated_sql": self.generated_sql,
             "normalized_sql": self.normalized_sql,
             "result": result,
-            "meta": {"model": self.model, "git_commit": git_commit()},
+            "meta": {
+                "model": self.model,
+                "git_commit": git_commit(),
+                "pipeline_hash": pipeline_hash(),
+            },
         }
 
 
@@ -148,6 +164,29 @@ def git_commit() -> str:
     except (OSError, subprocess.SubprocessError):
         return "unknown"
     return out.stdout.strip() or "unknown"
+
+
+def pipeline_files(package_dir: Path = PACKAGE_DIR) -> list[Path]:
+    """What decides a run: the package's code, its JSON contracts and data/schema.yaml."""
+    return [
+        *sorted(package_dir.glob("*.py")),
+        *sorted((package_dir / "schemas").glob("*.json")),
+        config.SCHEMA_PATH,
+    ]
+
+
+@lru_cache(maxsize=1)
+def pipeline_hash() -> str:
+    """sha256 (16 hex) of ``pipeline_files()``, line endings normalized.
+
+    Unlike ``git_commit`` it changes with uncommitted edits, so ``results --merge`` can tell
+    whether an earlier trace was made by the pipeline as it is now.
+    """
+    h = hashlib.sha256()
+    for path in pipeline_files():
+        h.update(path.name.encode() + b"\0")
+        h.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return h.hexdigest()[:16]
 
 
 def default_trace_path() -> Path:
@@ -216,10 +255,40 @@ def append_jsonl(record: dict[str, Any], path: Path) -> Path:
 
 
 def _write_line(line: str, path: Path) -> Path:
+    """Append one line under an exclusive lock, so parallel runs never interleave lines."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
+    with _locked(path), open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
     return path
+
+
+@contextmanager
+def _locked(path: Path, timeout_s: float = LOCK_TIMEOUT_S) -> Iterator[None]:
+    """Hold an exclusive lock on the sidecar ``<path>.lock`` (a separate file, so the log
+    itself is only ever opened for appending). msvcrt on Windows, flock elsewhere."""
+    with open(path.with_name(path.name + ".lock"), "a+b") as f:
+        if os.name == "nt":
+            deadline = time.monotonic() + timeout_s
+            while True:
+                f.seek(0)
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"could not lock {path} in {timeout_s:g} s") from None
+                    time.sleep(0.005)
+            try:
+                yield
+            finally:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        else:  # pragma: no cover - POSIX (the tests run on Windows here, and in CI on Linux)
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def dumps(trace: dict[str, Any]) -> str:

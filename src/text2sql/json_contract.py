@@ -8,6 +8,10 @@ property, item, ``$defs`` entry and ``if``/``then`` branch, reached or not) befo
 is checked, and raises ValueError on a keyword, type name or argument the checker does not
 implement. ``check_schema`` always lints first.
 
+``$ref`` is either local (``#/...``) or a sibling schema file (``name.json`` or
+``name.json#/...``, resolved next to the referring file, which must have been read by
+``load_schema``); refs inside the sibling resolve against the sibling. Cycles are refused.
+
 Semantics differ from full JSON Schema on purpose, in the strict direction: ``enum`` and
 ``const`` also compare types (``0`` is not ``false``, ``1.0`` is not ``1``). One Python quirk
 remains: in ``pattern``, ``$`` also matches before a final newline, so fixed-format strings
@@ -55,17 +59,34 @@ def _same(a: Any, b: Any) -> bool:
     return type(a) is type(b) and a == b
 
 
-def _resolve(ref: str, root: Schema) -> Schema:
-    if not ref.startswith("#/"):
-        raise ValueError(f"unsupported $ref (only local '#/...' refs): {ref!r}")
+_SCHEMA_DIRS: dict[int, Path] = {}  # id(root loaded by load_schema) -> its directory
+_LOADING: set[Path] = set()  # schema files being loaded, to refuse $ref cycles
+
+
+def _resolve(ref: str, root: Schema) -> tuple[Schema, Schema]:
+    """Return ``(subschema, its root)``: refs inside a sibling file resolve in that file.
+
+    ``#/...`` points into ``root``; ``name.json`` or ``name.json#/...`` points into a schema
+    file in the same directory as ``root`` (only for a root read by ``load_schema``).
+    """
+    if not isinstance(ref, str):
+        raise ValueError(f"unsupported $ref: {ref!r}")
+    file, _, fragment = ref.partition("#")
+    if file:
+        base = _SCHEMA_DIRS.get(id(root))
+        if base is None or not re.fullmatch(r"[A-Za-z0-9_.-]+\.json", file):
+            raise ValueError(f"unsupported $ref (local '#/...' or a sibling .json file): {ref!r}")
+        root = load_schema(base / file)
+    if fragment and not fragment.startswith("/"):
+        raise ValueError(f"unsupported $ref (fragment must start with '/'): {ref!r}")
     node: Any = root
-    for part in ref.removeprefix("#/").split("/"):
+    for part in fragment.removeprefix("/").split("/") if fragment else []:
         if not isinstance(node, dict) or part not in node:
             raise ValueError(f"unresolvable $ref: {ref!r}")
         node = node[part]
     if not isinstance(node, dict):
         raise ValueError(f"$ref does not point to a schema: {ref!r}")
-    return node
+    return node, root
 
 
 def check(value: Any, schema: Schema, root: Schema, path: str = "$") -> list[str]:
@@ -153,7 +174,8 @@ def _pattern(v: Any, arg: Any, _s: Schema, _r: Schema, path: str) -> list[str]:
 
 
 def _ref(v: Any, arg: Any, _s: Schema, root: Schema, path: str) -> list[str]:
-    return check(v, _resolve(arg, root), root, path)
+    sub, sub_root = _resolve(arg, root)
+    return check(v, sub, sub_root, path)
 
 
 def _all_of(v: Any, arg: Any, _s: Schema, root: Schema, path: str) -> list[str]:
@@ -248,9 +270,22 @@ def lint(root: Schema) -> None:
 
 @functools.cache
 def load_schema(schema_path: Path) -> Schema:
-    """Read and lint a schema file (once per path)."""
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    lint(schema)
+    """Read and lint a schema file (once per path), and the sibling files it ``$ref``s."""
+    key = Path(schema_path).resolve()
+    if key in _LOADING:
+        raise ValueError(f"$ref cycle through {key.name}")
+    schema = json.loads(key.read_text(encoding="utf-8"))
+    if not isinstance(schema, dict):
+        raise ValueError(f"schema file {key.name} must hold an object")
+    _SCHEMA_DIRS[id(schema)] = key.parent
+    _LOADING.add(key)
+    try:
+        lint(schema)
+    except ValueError:
+        del _SCHEMA_DIRS[id(schema)]
+        raise
+    finally:
+        _LOADING.discard(key)
     return schema
 
 

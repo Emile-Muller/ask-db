@@ -33,6 +33,15 @@ class ExecutionResult:
     duration_ms: int
 
 
+# DuckDB error classes that mean "the SQL itself is wrong" (bad column, type, cast), not a
+# guardrail (permission, timeout, memory). Only these let /question-batch send the error
+# back to the proposer for one corrected proposal (run --brief: "sql_error").
+SQL_MISTAKES = frozenset({
+    "BinderException", "CatalogException", "ConversionException", "InvalidInputException",
+    "OutOfRangeException", "ParserException", "TypeMismatchException",
+})  # fmt: skip
+
+
 class ExecutionRefused(Exception):
     """DuckDB refused or aborted the statement (permission, timeout, SQL error)."""
 

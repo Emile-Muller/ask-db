@@ -9,7 +9,8 @@ how to make an AI-driven text-to-SQL tool safe. Natural language → SQL propose
   the only code that opens the database for writing (fixed, trusted SQL only)
 
 ## Core principle
-The LLM (the Claude Code session) only PROPOSES SQL. Everything that decides whether SQL
+The LLM (an `sql-proposer` agent that can only Read its layer-2 prompt file and Write its
+reply once to its proposal file, spawned by `/question` and `/question-batch`) only PROPOSES SQL. Everything that decides whether SQL
 runs is deterministic Python code, testable without any LLM. **The validator (layer 3) and
 the executor (layer 4) are the security boundary.** They must hold on their own even if
 layers 1 and 2 are bypassed. Layers 1 (input screen), 2 (prompt context) and 5 (output
@@ -40,7 +41,41 @@ before a trace is logged or printed (a trace that fails is neither, exit 1).
   `questions/logs/question-reviews/<YYYYMMDD>.jsonl` (`review_log.py`); no database. The
   question-reviewer agent may run only this command, enforced by its `PreToolUse` hook
   (`review_guard.py`)
+- `results --ids <manifest.json>` (or the manifest on stdin): writes `questions/results.json`
+  (`results.py`, format 2) from a list of `{id, trace_id, review_id, error}`. It copies each
+  trace and review verbatim from the logs by id, joins `id/category/expect` from
+  `questions/questions.yaml`, derives `actual`, `pass`, `error` and `summary`, and checks the
+  document against `src/text2sql/schemas/question_results.json` plus `results.cross_checks`
+  before writing; on failure it writes nothing (exit 1). Output only to `.json` under
+  `questions/` or the temp dir. `results --check <file> [--verify-logs]` checks a file (exit
+  0 valid, 1 not); `results --list` prints `[{id, question}]`; `results --list --rerun <ids>`
+  prints those plus every stale entry; `results --ids <m> --merge` reuses the entries not in
+  the manifest, only if their trace has the current `git_commit` and `meta.pipeline_hash`
+  (`trace.pipeline_hash`: the package code, contracts and `data/schema.yaml`). No database,
+  no LLM
+- Batch options (used by `/question-batch`, so no untrusted text is quoted for a shell;
+  `/question` uses `--brief` and `--proposal-file` with `--question`):
+  `context`/`run --question-id <id>` take the text of that `questions.yaml` entry;
+  `--brief` prints one JSON line (`context`: `status` refused/raw_sql/prompt, the prompt
+  written to `questions/logs/prompts/<hex>.txt`, and the `proposal_file` /
+  `retry_proposal_file` the proposer may write, `<temp>/text2sql-proposals/<hex>[-2].json`;
+  `run`: `trace_id`, `verdict`, `refused_by`, `sql_error`); `run --proposal-file <f>` reads
+  the proposer's JSON reply (`.json` under the temp dir) instead of `--sql`/`--refusal`; with `--prompt-file <p>`
+  (only a `<hex>.txt` in the prompts dir) it deletes that prompt after the run
+- `/question-batch [ids]`: the orchestrator runs `context`/`run` itself by id (layer-1
+  refusals and raw SQL need no LLM), in parallel waves; a `sql-proposer` agent may only Read
+  its prompt file and Write its JSON reply once to its proposal file (`PreToolUse` hook
+  `proposer_guard.py`), so the orchestrator never copies SQL text; each trace is
+  reviewed by `/question-review <trace id> --terse` (forked), given only the trace id
+- Log appends (`trace._write_line`, traces and reviews) hold a lock on `<log>.lock`, so
+  parallel runs and reviews are safe
 - Exit codes: 0 accepted, 2 refused, 1 internal error. Traces go to stdout and `questions/logs/questions/<YYYYMMDD>.jsonl`.
+
+## JSON contracts (`src/text2sql/schemas/`, checked by `json_contract.py`)
+- `question_trace.json`: one trace (plus `trace.cross_checks`)
+- `question_review.json`: the reviewer's input to `review`
+- `question_results.json`: `questions/results.json` (plus `results.cross_checks`); `$ref`s
+  the two above (sibling-file refs) for the embedded trace and the review record's fields
 
 ## Safety rules (must follow)
 
@@ -67,10 +102,10 @@ before a trace is logged or printed (a trace that fails is neither, exit 1).
 - `.\.venv\Scripts\python.exe -m pytest --cov` runs offline: no LLM, no network.
 - Keep ruff clean (pre-commit runs `ruff check --fix` and `ruff format`).
 
-### 5. The allowlist and red-team corpus are frozen for sessions
-`.claude/settings.json` denies `Edit(./tests/redteam_corpus.yaml)` and
-`Edit(./data/schema.yaml)`, so a `/question` run can never change the allowlist or the
-red-team cases that judge it. It also denies `Edit(./.claude/skills/question/**)` and
-`Edit(./src/text2sql/schemas/**)`, so a session cannot loosen the trace, report or review
-contract it is checked against. To change them, a human removes those rules temporarily, makes
-the change, and puts them back.
+### 5. Question runs cannot edit what judges them
+`/question`, `/question-review` and `/question-batch` declare a `PreToolUse` hook
+(`src/text2sql/edit_guard.py`, list in `FROZEN`). From the first call of one of them until the
+session ends, edit tools are denied on the allowlist (`data/schema.yaml`), the red-team corpus,
+`questions/questions.yaml`, `src/text2sql/schemas/**`, the question skills and agents,
+`.claude/settings*.json` and the guards. To change those files, use a session that has not run
+a question skill. Do not bypass the guard with shell writes.

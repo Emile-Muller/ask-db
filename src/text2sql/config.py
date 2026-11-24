@@ -6,6 +6,7 @@ database access. ``tests/test_validator.py`` checks that the yaml matches the da
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -17,9 +18,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 DB_PATH = DATA_DIR / "olist.duckdb"
 SCHEMA_PATH = DATA_DIR / "schema.yaml"
-LOGS_DIR = PROJECT_ROOT / "questions" / "logs"
+QUESTIONS_DIR = PROJECT_ROOT / "questions"
+QUESTIONS_PATH = QUESTIONS_DIR / "questions.yaml"  # batch inputs (/question-batch)
+RESULTS_PATH = QUESTIONS_DIR / "results.json"  # batch results (results.py)
+LOGS_DIR = QUESTIONS_DIR / "logs"
 RUNS_DIR = LOGS_DIR / "questions"  # /question traces
 REVIEWS_DIR = LOGS_DIR / "question-reviews"  # /question-review records (review_log.py)
+PROMPTS_DIR = LOGS_DIR / "prompts"  # layer-2 prompts for the sql-proposer (context --brief)
+# The sql-proposer writes its reply here itself (proposer_guard), so no one copies it.
+PROPOSALS_DIR = Path(tempfile.gettempdir()) / "text2sql-proposals"
 
 DIALECT = "duckdb"
 
@@ -43,6 +50,8 @@ REVIEW_MAX_TEXT_CHARS = 2_000
 REVIEW_MAX_SQL_CHARS = 5_000
 REVIEW_MAX_MODEL_CHARS = 100
 REVIEW_MAX_FINDINGS = 20
+# Batch (/question-batch)
+MAX_PROPOSAL_CHARS = 20_000  # run --proposal-file: the proposer's JSON reply
 
 
 @dataclass(frozen=True)

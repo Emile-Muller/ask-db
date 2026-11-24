@@ -147,9 +147,17 @@ def test_bad_input_is_rejected(runs_dir, tmp_path, change):
     assert not (tmp_path / "r.jsonl").exists()
 
 
-def test_missing_key_and_bad_json_are_rejected(runs_dir, tmp_path):
+def test_missing_model_is_logged_as_null(runs_dir, tmp_path):
+    """model is optional: forgetting it must not cost the reviewer a rejected call."""
     p = payload()
     del p["model"]
+    record, _ = log(runs_dir, tmp_path / "r.jsonl", p)
+    assert record["meta"]["model"] is None
+
+
+def test_missing_key_and_bad_json_are_rejected(runs_dir, tmp_path):
+    p = payload()
+    del p["summary"]
     with pytest.raises(review_log.ReviewError, match="missing"):
         log(runs_dir, tmp_path / "r.jsonl", p)
     for raw in ("{not json", "[]", "x" * 64_001):
